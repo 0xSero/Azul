@@ -38,6 +38,7 @@ regex = "1.10"
 unicode-width = "0.1"
 urlencoding = "2.1"
 textwrap = "0.16"
+which = "6.0"
 
 # HTML processing
 html2text = "0.12"

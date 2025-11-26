@@ -4,6 +4,8 @@ mod browser;
 mod chat;
 mod config;
 mod mascot;
+mod memory;
+mod rag;
 mod scrape;
 mod search;
 mod storage;

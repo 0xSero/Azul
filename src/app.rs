@@ -66,6 +66,8 @@ pub enum PanelMode {
     Help,
     Chat,
     Settings,
+    Rag,
+    Memory,
 }
 
 pub struct App {
@@ -104,6 +106,13 @@ pub struct App {
     pub settings_model_input: String,
     pub settings_editing_model: bool,
 
+    // RAG & Memory
+    pub rag_client: Option<crate::rag::RagClient>,
+    pub rag_results: Vec<String>,
+    pub rag_query: String,
+    pub memory_client: Option<crate::memory::MemoryClient>,
+    pub memory_nodes: Vec<String>,
+
     // Message passing
     page_rx: Receiver<AppMessage>,
     page_tx: Sender<AppMessage>,
@@ -140,12 +149,16 @@ impl App {
             None
         };
 
+        // Initialize RAG and memory clients
+        let rag_client = crate::rag::RagClient::from_config(&config);
+        let memory_client = crate::memory::MemoryClient::from_config(&config);
+
         let mut app = Self {
             config,
             focus: Focus::Content,
             should_quit: false,
             animation_tick: 0,
-            status_message: "Ready - / search | t new tab | b bookmarks | c chat | ? help".to_string(),
+            status_message: "Ready - / search | t new tab | b bookmarks | c chat | r rag | m memory | ? help".to_string(),
             view_mode: ViewMode::Rendered,
             format_text: true,
             ai_summary: None,
@@ -165,6 +178,11 @@ impl App {
             settings_selected: 0,
             settings_model_input: String::new(),
             settings_editing_model: false,
+            rag_client,
+            rag_results: Vec::new(),
+            rag_query: String::new(),
+            memory_client,
+            memory_nodes: Vec::new(),
             page_rx,
             page_tx,
             summarizer: Summarizer::from_env().map(Arc::new),
@@ -311,6 +329,8 @@ impl App {
             }
             PanelMode::Chat => return self.handle_chat_keys(key),
             PanelMode::Settings => return self.handle_settings_keys(key),
+            PanelMode::Rag => return self.handle_rag_keys(key),
+            PanelMode::Memory => return self.handle_memory_keys(key),
             PanelMode::None => {}
         }
 
@@ -406,6 +426,18 @@ impl App {
             }
             (KeyCode::Char(','), KeyModifiers::NONE) => {
                 self.panel_mode = PanelMode::Settings;
+                return Ok(());
+            }
+            // RAG & Memory
+            (KeyCode::Char('r'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.panel_mode = PanelMode::Rag;
+                self.status_message = "RAG Panel - Enter query, Esc to close".to_string();
+                return Ok(());
+            }
+            (KeyCode::Char('m'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.panel_mode = PanelMode::Memory;
+                self.refresh_memory();
+                self.status_message = "Memory Panel - Viewing mem-layer graph".to_string();
                 return Ok(());
             }
             _ => {}
@@ -955,6 +987,75 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_rag_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.panel_mode = PanelMode::None;
+            }
+            KeyCode::Char(c) if c != 'r' && c != 'q' => {
+                self.rag_query.push(c);
+            }
+            KeyCode::Backspace => {
+                self.rag_query.pop();
+            }
+            KeyCode::Enter => {
+                if !self.rag_query.is_empty() && self.rag_client.is_some() {
+                    let query = self.rag_query.clone();
+                    self.status_message = format!("Querying RAG: {}", query);
+
+                    if let Some(rag) = &self.rag_client {
+                        match rag.query(&query, Some(5)) {
+                            Ok(response) => {
+                                self.rag_results = response.sources
+                                    .iter()
+                                    .map(|s| format!("[{:.2}] {}", s.score, s.content))
+                                    .collect();
+                                self.status_message = format!("Found {} results", self.rag_results.len());
+                            }
+                            Err(e) => {
+                                self.status_message = format!("RAG error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_memory_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.panel_mode = PanelMode::None;
+            }
+            KeyCode::Char('r') => {
+                // Refresh memory
+                self.refresh_memory();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn refresh_memory(&mut self) {
+        if let Some(mem) = &self.memory_client {
+            match mem.list_nodes(None, Some(20)) {
+                Ok(nodes) => {
+                    self.memory_nodes = nodes;
+                    self.status_message = format!("Memory: {} nodes", self.memory_nodes.len());
+                }
+                Err(e) => {
+                    self.status_message = format!("Memory error: {}", e);
+                    self.memory_nodes.clear();
+                }
+            }
+        } else {
+            self.status_message = "mem-layer not available".to_string();
+            self.memory_nodes.clear();
+        }
     }
 
     fn update_status(&mut self) {

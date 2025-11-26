@@ -11,6 +11,10 @@ pub struct Config {
     pub ai: Option<AIConfig>,
     #[serde(default = "default_refresh_rate")]
     pub refresh_rate_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +80,8 @@ impl Default for Config {
             theme: Theme::default(),
             ai: None,
             refresh_rate_ms: default_refresh_rate(),
+            rag_base_url: None,
+            memory_scope: None,
         }
     }
 }

@@ -66,6 +66,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         PanelMode::Help => render_help_panel(frame, inner, app),
         PanelMode::Chat => render_chat_panel(frame, inner, app),
         PanelMode::Settings => render_settings_panel(frame, inner, app),
+        PanelMode::Rag => render_rag_panel(frame, inner, app),
+        PanelMode::Memory => render_memory_panel(frame, inner, app),
         PanelMode::None => {}
     }
 }
@@ -771,5 +773,124 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().fg(TOKYO_TEXT));
 
     frame.render_widget(settings, panel_area);
+}
+
+fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(80, 80, area);
+    frame.render_widget(Clear, panel_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .title(" RAG Query | Enter to search | Esc to close ")
+        .style(Style::default().bg(TOKYO_BG));
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Input area
+            Constraint::Min(0),     // Results area
+        ])
+        .split(panel_area.inner(Margin { horizontal: 1, vertical: 1 }));
+
+    // Input box
+    let input_text = format!("{}_", app.rag_query);
+    let input = Paragraph::new(input_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(AZUL_BLUE))
+                .title(" Query "),
+        )
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(input, chunks[0]);
+
+    // Results
+    let status = if app.rag_client.is_none() {
+        vec![Line::from(vec![Span::styled(
+            "RAG service not available. Check home-rag at http://localhost:8000",
+            Style::default().fg(TOKYO_RED),
+        )])]
+    } else if app.rag_results.is_empty() {
+        vec![Line::from(vec![Span::styled(
+            "No results yet. Enter a query and press Enter.",
+            Style::default().fg(TOKYO_COMMENT),
+        )])]
+    } else {
+        let mut lines = vec![Line::from(vec![Span::styled(
+            format!("Found {} results:", app.rag_results.len()),
+            Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD),
+        )])];
+        lines.push(Line::from(""));
+
+        for (i, result) in app.rag_results.iter().enumerate() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}. ", i + 1), Style::default().fg(TOKYO_ORANGE)),
+                Span::styled(result, Style::default().fg(TOKYO_TEXT)),
+            ]));
+            lines.push(Line::from(""));
+        }
+
+        lines
+    };
+
+    let results = Paragraph::new(status)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(TOKYO_BLUE))
+                .title(" Results "),
+        )
+        .style(Style::default().fg(TOKYO_TEXT))
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(results, chunks[1]);
+    frame.render_widget(block, panel_area);
+}
+
+fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(70, 70, area);
+    frame.render_widget(Clear, panel_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .title(" Memory Graph (mem-layer) | r to refresh | Esc to close ")
+        .style(Style::default().bg(TOKYO_BG));
+
+    let status = if app.memory_client.is_none() {
+        vec![Line::from(vec![Span::styled(
+            "mem-layer not available. Install it from: ~/.local/bin/mem-layer",
+            Style::default().fg(TOKYO_RED),
+        )])]
+    } else if app.memory_nodes.is_empty() {
+        vec![Line::from(vec![Span::styled(
+            "No memory nodes found. Memory graph is empty.",
+            Style::default().fg(TOKYO_COMMENT),
+        )])]
+    } else {
+        let mut lines = vec![Line::from(vec![Span::styled(
+            format!("Memory Nodes ({}):", app.memory_nodes.len()),
+            Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD),
+        )])];
+        lines.push(Line::from(""));
+
+        for (i, node) in app.memory_nodes.iter().enumerate() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}. ", i + 1), Style::default().fg(TOKYO_ORANGE)),
+                Span::styled(node, Style::default().fg(TOKYO_TEXT)),
+            ]));
+        }
+
+        lines
+    };
+
+    let memory = Paragraph::new(status)
+        .block(block)
+        .style(Style::default().fg(TOKYO_TEXT))
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(memory, panel_area);
 }
 
