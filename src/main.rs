@@ -1,6 +1,7 @@
 mod ai;
 mod app;
 mod browser;
+mod chat;
 mod config;
 mod mascot;
 mod scrape;

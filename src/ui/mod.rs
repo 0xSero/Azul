@@ -66,6 +66,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         PanelMode::Bookmarks => render_bookmarks_panel(frame, inner, app),
         PanelMode::History => render_history_panel(frame, inner, app),
         PanelMode::Help => render_help_panel(frame, inner, app),
+        PanelMode::Chat => render_chat_panel(frame, inner, app),
+        PanelMode::Settings => render_settings_panel(frame, inner, app),
         PanelMode::None => {}
     }
 }
@@ -640,3 +642,136 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
 
     out
 }
+
+fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(80, 80, area);
+    frame.render_widget(Clear, panel_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(AZUL_BLUE))
+        .title(" AI Chat | c to close | Enter to send ")
+        .style(Style::default().bg(TOKYO_BG));
+
+    if app.chat_session.is_none() {
+        let empty = Paragraph::new("AI Chat not available. Configure OPENROUTER_API_KEY in settings.")
+            .block(block)
+            .style(Style::default().fg(TOKYO_COMMENT))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, panel_area);
+        return;
+    }
+
+    let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
+
+    // Split into messages area and input
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
+        .split(inner);
+
+    // Render messages
+    if let Some(session) = &app.chat_session {
+        let messages: Vec<Line> = session.messages.iter().map(|msg| {
+            let style = match msg.role {
+                crate::chat::Role::User => Style::default().fg(TOKYO_GREEN),
+                crate::chat::Role::Assistant => Style::default().fg(AZUL_BLUE),
+                _ => Style::default().fg(TOKYO_COMMENT),
+            };
+            Line::from(vec![
+                Span::styled(format!("{:?}: ", msg.role), style.add_modifier(Modifier::BOLD)),
+                Span::styled(&msg.content, style),
+            ])
+        }).collect();
+
+        let msg_para = Paragraph::new(messages)
+            .block(Block::default())
+            .style(Style::default().fg(TOKYO_TEXT));
+        frame.render_widget(msg_para, chunks[0]);
+    }
+
+    // Render input
+    let input_text = format!("> {}_", app.chat_input);
+    let input = Paragraph::new(input_text)
+        .block(Block::default().borders(Borders::ALL).title(" Input "))
+        .style(Style::default().fg(TOKYO_TEXT));
+    frame.render_widget(input, chunks[1]);
+
+    frame.render_widget(block, panel_area);
+}
+
+fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(70, 70, area);
+    frame.render_widget(Clear, panel_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .title(" Settings | Esc to close ")
+        .style(Style::default().bg(TOKYO_BG));
+
+    let settings_text = vec![
+        Line::from(vec![Span::styled("Browser Settings", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD))]),
+        Line::from(""),
+        Line::from(vec![Span::styled("AI Configuration:", Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD))]),
+        Line::from(""),
+    ];
+
+    let mut lines = settings_text;
+
+    // Show AI config
+    if let Some(ai) = &app.config.ai {
+        if let Some(provider) = &ai.provider {
+            lines.push(Line::from(vec![
+                Span::raw("  Provider: "),
+                Span::styled(provider, Style::default().fg(TOKYO_GREEN)),
+            ]));
+        }
+        if let Some(model) = &ai.model {
+            lines.push(Line::from(vec![
+                Span::raw("  Model: "),
+                Span::styled(model, Style::default().fg(TOKYO_GREEN)),
+            ]));
+        }
+        if let Some(key) = &ai.api_key {
+            let masked = if key.len() > 10 {
+                format!("{}...{}", &key[..7], &key[key.len()-4..])
+            } else {
+                "***".to_string()
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  API Key: "),
+                Span::styled(masked, Style::default().fg(TOKYO_COMMENT)),
+            ]));
+        }
+        if let Some(models) = &ai.fallback_models {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![Span::styled("  Fallback Models:", Style::default().fg(TOKYO_COMMENT))]));
+            for m in models.iter().take(5) {
+                lines.push(Line::from(vec![
+                    Span::raw("    - "),
+                    Span::styled(m, Style::default().fg(TOKYO_TEXT)),
+                ]));
+            }
+        }
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  No AI configuration found", Style::default().fg(TOKYO_COMMENT)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Edit ~/.config/azul/config.json to change settings", Style::default().fg(TOKYO_COMMENT)),
+    ]));
+
+    let settings = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(settings, panel_area);
+}
+

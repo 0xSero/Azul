@@ -60,6 +60,8 @@ pub enum PanelMode {
     Bookmarks,
     History,
     Help,
+    Chat,
+    Settings,
 }
 
 pub struct App {
@@ -87,6 +89,17 @@ pub struct App {
     pub bookmarks_selected: usize,
     pub history_selected: usize,
 
+    // Chat
+    pub chat_session: Option<crate::chat::ChatSession>,
+    pub chat_input: String,
+    pub chat_selected_model: usize,
+    pub chat_scroll: usize,
+
+    // Settings
+    pub settings_selected: usize,
+    pub settings_model_input: String,
+    pub settings_editing_model: bool,
+
     // Message passing
     page_rx: Receiver<AppMessage>,
     page_tx: Sender<AppMessage>,
@@ -107,12 +120,28 @@ impl App {
         // Try to open database, but don't fail if it errors
         let db = Database::open().ok();
 
+        // Initialize chat session with available models
+        let chat_session = if let Some(api_key) = config.get_api_key() {
+            if !api_key.is_empty() {
+                let model = config.get_ai_model().unwrap_or("qwen/qwen3-235b-a22b:free").to_string();
+                let mut models = vec![model.clone()];
+                if let Some(fallback) = config.get_fallback_models() {
+                    models.extend(fallback);
+                }
+                Some(crate::chat::ChatSession::new(model, models))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut app = Self {
             config,
             focus: Focus::Content,
             should_quit: false,
             animation_tick: 0,
-            status_message: "Ready - / search | t new tab | b bookmarks | h history | ? help".to_string(),
+            status_message: "Ready - / search | t new tab | b bookmarks | c chat | ? help".to_string(),
             view_mode: ViewMode::Rendered,
             format_text: true,
             ai_summary: None,
@@ -125,6 +154,13 @@ impl App {
             history_list: Vec::new(),
             bookmarks_selected: 0,
             history_selected: 0,
+            chat_session,
+            chat_input: String::new(),
+            chat_selected_model: 0,
+            chat_scroll: 0,
+            settings_selected: 0,
+            settings_model_input: String::new(),
+            settings_editing_model: false,
             page_rx,
             page_tx,
             summarizer: Summarizer::from_env().map(Arc::new),
@@ -262,6 +298,8 @@ impl App {
                 self.panel_mode = PanelMode::None;
                 return Ok(());
             }
+            PanelMode::Chat => return self.handle_chat_keys(key),
+            PanelMode::Settings => return self.handle_settings_keys(key),
             PanelMode::None => {}
         }
 
@@ -348,6 +386,15 @@ impl App {
             }
             (KeyCode::Char('B'), KeyModifiers::NONE) => {
                 self.toggle_bookmark();
+                return Ok(());
+            }
+            // Chat & Settings
+            (KeyCode::Char('c'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.panel_mode = PanelMode::Chat;
+                return Ok(());
+            }
+            (KeyCode::Char(','), KeyModifiers::NONE) => {
+                self.panel_mode = PanelMode::Settings;
                 return Ok(());
             }
             _ => {}
@@ -815,6 +862,44 @@ impl App {
             }
         }
 
+        Ok(())
+    }
+
+    fn handle_chat_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => {
+                self.panel_mode = PanelMode::None;
+            }
+            KeyCode::Char(c) => {
+                self.chat_input.push(c);
+            }
+            KeyCode::Backspace => {
+                self.chat_input.pop();
+            }
+            KeyCode::Enter => {
+                if !self.chat_input.is_empty() {
+                    let message = self.chat_input.clone();
+                    if let Some(session) = &mut self.chat_session {
+                        session.add_user_message(message);
+                        // TODO: Send to AI and get response
+                        session.add_assistant_message("AI chat coming soon!".to_string());
+                    }
+                    self.chat_input.clear();
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_settings_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.panel_mode = PanelMode::None;
+                self.settings_editing_model = false;
+            }
+            _ => {}
+        }
         Ok(())
     }
 
