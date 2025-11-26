@@ -8,7 +8,7 @@ mod ui;
 
 use anyhow::{Context, Result};
 use app::App;
-use browser::Browser;
+use browser::{Browser, RenderMode};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -29,9 +29,11 @@ fn print_help() {
 USAGE:
     azul-browse [OPTIONS]
     azul-browse -q <QUERY>
+    azul-browse --js -q <URL>
 
 OPTIONS:
     -q, --query <QUERY>    Search or fetch URL in CLI mode
+    --js                   Enable JavaScript rendering (headless Chrome)
     --test-http            Run HTTP client tests
     -h, --help             Show this help message
     -v, --version          Show version
@@ -80,6 +82,9 @@ fn print_version() {
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
+    // Check for --js flag
+    let js_mode = args.iter().any(|a| a == "--js");
+
     // Parse arguments
     for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
@@ -93,11 +98,13 @@ fn main() -> Result<()> {
             }
             "-q" | "--query" => {
                 if let Some(query) = args.get(i + 1) {
-                    return run_cli_mode(query);
-                } else if args.len() > i + 1 {
-                    // Multiple args after -q, join them
-                    let query = args[i + 1..].join(" ");
-                    return run_cli_mode(&query);
+                    if query == "--js" {
+                        // --js came after -q, get next arg
+                        if let Some(q) = args.get(i + 2) {
+                            return run_cli_mode(q, js_mode);
+                        }
+                    }
+                    return run_cli_mode(query, js_mode);
                 } else {
                     eprintln!("Error: -q requires a query argument");
                     return Ok(());
@@ -112,8 +119,9 @@ fn main() -> Result<()> {
 
     // Legacy support: -q query (where query is multiple args)
     if args.len() >= 3 && args[1] == "-q" {
-        let query = args[2..].join(" ");
-        return run_cli_mode(&query);
+        let query_parts: Vec<&String> = args[2..].iter().filter(|a| *a != "--js").collect();
+        let query = query_parts.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+        return run_cli_mode(&query, js_mode);
     }
 
     // Start TUI mode
@@ -190,18 +198,27 @@ fn run_app<B: ratatui::backend::Backend>(
 }
 
 /// CLI mode - fetch a URL or search query and display results
-fn run_cli_mode(query: &str) -> Result<()> {
+fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
     println!("Azul CLI Mode v{}", VERSION);
     println!("Query: {}", query);
+    if js_mode {
+        println!("Mode: JavaScript rendering (headless Chrome)");
+    }
     println!("---");
+
+    let render_mode = if js_mode {
+        RenderMode::JavaScript
+    } else {
+        RenderMode::Static
+    };
 
     match search::classify_query(query) {
         QueryTarget::Url(url) => {
-            println!("Fetching: {}", url);
+            println!("Fetching{}: {}", if js_mode { " [JS]" } else { "" }, url);
             println!();
 
             let browser = Browser::new().context("Failed to create browser")?;
-            let page = browser.fetch(&url).context("Failed to fetch page")?;
+            let page = browser.fetch_with_mode(&url, render_mode).context("Failed to fetch page")?;
 
             print_page(&page);
         }
