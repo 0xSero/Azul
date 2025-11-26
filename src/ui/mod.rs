@@ -675,21 +675,34 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     // Render messages
     if let Some(session) = &app.chat_session {
-        let messages: Vec<Line> = session.messages.iter().map(|msg| {
-            let style = match msg.role {
-                crate::chat::Role::User => Style::default().fg(TOKYO_GREEN),
-                crate::chat::Role::Assistant => Style::default().fg(AZUL_BLUE),
-                _ => Style::default().fg(TOKYO_COMMENT),
-            };
-            Line::from(vec![
-                Span::styled(format!("{:?}: ", msg.role), style.add_modifier(Modifier::BOLD)),
-                Span::styled(&msg.content, style),
-            ])
-        }).collect();
+        let mut lines = Vec::new();
 
-        let msg_para = Paragraph::new(messages)
+        for msg in &session.messages {
+            let (prefix, style) = match msg.role {
+                crate::chat::Role::User => ("You: ", Style::default().fg(TOKYO_GREEN)),
+                crate::chat::Role::Assistant => ("AI: ", Style::default().fg(AZUL_BLUE)),
+                crate::chat::Role::System => continue, // Skip system messages
+                _ => ("", Style::default().fg(TOKYO_COMMENT)),
+            };
+
+            // Add prefix line
+            lines.push(Line::from(vec![
+                Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
+            ]));
+
+            // Add message content (will wrap automatically)
+            lines.push(Line::from(vec![
+                Span::styled(&msg.content, style),
+            ]));
+
+            // Add spacing
+            lines.push(Line::from(""));
+        }
+
+        let msg_para = Paragraph::new(lines)
             .block(Block::default())
-            .style(Style::default().fg(TOKYO_TEXT));
+            .style(Style::default().fg(TOKYO_TEXT))
+            .wrap(Wrap { trim: true });
         frame.render_widget(msg_para, chunks[0]);
     }
 
