@@ -43,12 +43,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         vertical: 1,
     });
 
-    // Main layout: Tab Bar | Title | URL Bar | Content | Status
+    // Main layout: Tab Bar | URL Bar | Content | Status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),   // Tab bar
-            Constraint::Length(3),   // Title bar
             Constraint::Length(3),   // URL bar
             Constraint::Min(0),      // Main content
             Constraint::Length(3),   // Status bar
@@ -56,10 +55,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(inner);
 
     render_tab_bar(frame, chunks[0], app);
-    render_title(frame, chunks[1], app);
-    render_url_bar(frame, chunks[2], app);
-    render_main_content(frame, chunks[3], app);
-    render_status_bar(frame, chunks[4], app);
+    render_url_bar(frame, chunks[1], app);
+    render_main_content(frame, chunks[2], app);
+    render_status_bar(frame, chunks[3], app);
 
     // Render overlay panels
     match app.panel_mode {

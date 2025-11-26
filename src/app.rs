@@ -1,10 +1,13 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::ai::Summarizer;
 use crate::browser::{Browser, Page, RenderMode};
+use crate::chat::ChatMessage;
 use crate::config::Config;
 use crate::mascot::{Mascot, MascotState};
 use crate::search::{self, QueryTarget, SearchManager};
@@ -51,6 +54,7 @@ pub enum AppMessage {
     LoadError(usize, String),
     AiSummary(String),
     AiError(String),
+    ChatResponse(String),
 }
 
 /// Panel mode for overlays
@@ -265,6 +269,13 @@ impl App {
                 AppMessage::AiError(err) => {
                     self.status_message = format!("AI error: {}", err);
                     self.mascot.set_state(MascotState::Error);
+                }
+                AppMessage::ChatResponse(response) => {
+                    if let Some(session) = &mut self.chat_session {
+                        session.add_assistant_message(response);
+                        self.mascot.set_state(MascotState::Success);
+                        self.status_message = "Response received".to_string();
+                    }
                 }
             }
         }
@@ -867,10 +878,34 @@ impl App {
 
     fn handle_chat_keys(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => {
+            KeyCode::Esc | KeyCode::Char('q') => {
                 self.panel_mode = PanelMode::None;
             }
-            KeyCode::Char(c) => {
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Cycle to previous model
+                if let Some(session) = &mut self.chat_session {
+                    if !session.available_models.is_empty() {
+                        self.chat_selected_model = if self.chat_selected_model == 0 {
+                            session.available_models.len() - 1
+                        } else {
+                            self.chat_selected_model - 1
+                        };
+                        session.set_model(session.available_models[self.chat_selected_model].clone());
+                        self.status_message = format!("Model: {}", session.model);
+                    }
+                }
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Cycle to next model
+                if let Some(session) = &mut self.chat_session {
+                    if !session.available_models.is_empty() {
+                        self.chat_selected_model = (self.chat_selected_model + 1) % session.available_models.len();
+                        session.set_model(session.available_models[self.chat_selected_model].clone());
+                        self.status_message = format!("Model: {}", session.model);
+                    }
+                }
+            }
+            KeyCode::Char(c) if c != 'c' => {
                 self.chat_input.push(c);
             }
             KeyCode::Backspace => {
@@ -879,12 +914,31 @@ impl App {
             KeyCode::Enter => {
                 if !self.chat_input.is_empty() {
                     let message = self.chat_input.clone();
-                    if let Some(session) = &mut self.chat_session {
-                        session.add_user_message(message);
-                        // TODO: Send to AI and get response
-                        session.add_assistant_message("AI chat coming soon!".to_string());
-                    }
                     self.chat_input.clear();
+
+                    if let Some(session) = &mut self.chat_session {
+                        session.add_user_message(message.clone());
+
+                        // Send to AI in background
+                        let api_key = self.config.get_api_key().unwrap_or("").to_string();
+                        let model = session.model.clone();
+                        let messages = session.messages.clone();
+                        let tx = self.page_tx.clone();
+
+                        self.mascot.set_state(crate::mascot::MascotState::Loading);
+                        self.status_message = "Thinking...".to_string();
+
+                        std::thread::spawn(move || {
+                            match send_chat_message(&api_key, &model, &messages) {
+                                Ok(response) => {
+                                    let _ = tx.send(AppMessage::ChatResponse(response));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
+                                }
+                            }
+                        });
+                    }
                 }
             }
             _ => {}
@@ -912,5 +966,77 @@ impl App {
             Focus::Bookmarks => "Bookmarks - j/k nav | Enter open | d delete | Esc close".to_string(),
             Focus::History => "History - j/k nav | Enter open | Ctrl+C clear | Esc close".to_string(),
         };
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Chat API Integration
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Serialize)]
+struct OpenAIChatRequest {
+    model: String,
+    messages: Vec<OpenAIChatMessage>,
+    max_tokens: u32,
+    temperature: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct OpenAIChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAIChatResponse {
+    choices: Vec<OpenAIChatChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAIChatChoice {
+    message: OpenAIChatMessage,
+}
+
+fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()?;
+
+    // Convert our messages to OpenAI format
+    let api_messages: Vec<OpenAIChatMessage> = messages
+        .iter()
+        .map(|m| OpenAIChatMessage {
+            role: match m.role {
+                crate::chat::Role::System => "system".to_string(),
+                crate::chat::Role::User => "user".to_string(),
+                crate::chat::Role::Assistant => "assistant".to_string(),
+                crate::chat::Role::Tool => "tool".to_string(),
+            },
+            content: m.content.clone(),
+        })
+        .collect();
+
+    let request = OpenAIChatRequest {
+        model: model.to_string(),
+        messages: api_messages,
+        max_tokens: 1024,
+        temperature: 0.7,
+    };
+
+    let response = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("HTTP-Referer", "https://github.com/ser/azul-browse")
+        .header("X-Title", "Azul Terminal Browser")
+        .json(&request)
+        .send()?;
+
+    let result: OpenAIChatResponse = response.json()?;
+
+    if let Some(choice) = result.choices.first() {
+        Ok(choice.message.content.clone())
+    } else {
+        anyhow::bail!("No response from API")
     }
 }
