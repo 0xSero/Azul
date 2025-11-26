@@ -156,7 +156,6 @@ impl MemoryClient {
 
         let mut cmd = Command::new(&self.mem_layer_path);
         cmd.arg("list")
-            .arg("nodes")
             .arg("--scope")
             .arg(&self.scope);
 
@@ -176,10 +175,19 @@ impl MemoryClient {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse the table output - skip header lines and decorations
         let nodes: Vec<String> = stdout
             .lines()
             .filter(|line| !line.is_empty())
-            .map(|s| s.to_string())
+            .filter(|line| !line.starts_with("┏"))
+            .filter(|line| !line.starts_with("┡"))
+            .filter(|line| !line.starts_with("└"))
+            .filter(|line| !line.starts_with("━"))
+            .filter(|line| !line.contains("INFO - "))
+            .filter(|line| !line.trim_start().starts_with("ID"))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
             .collect();
 
         Ok(nodes)

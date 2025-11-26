@@ -69,12 +69,9 @@ impl RagClient {
 
     /// Create from config
     pub fn from_config(config: &crate::config::Config) -> Option<Self> {
-        let base_url = config
-            .rag_base_url
-            .clone()
-            .unwrap_or_else(|| "http://localhost:8000".to_string());
-
-        Self::new(base_url).ok()
+        // Only enable if explicitly configured
+        let base_url = config.rag_base_url.as_ref()?;
+        Self::new(base_url.clone()).ok()
     }
 
     /// Check if RAG is available

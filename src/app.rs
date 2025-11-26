@@ -1090,12 +1090,21 @@ struct OpenAIChatMessage {
 
 #[derive(Deserialize)]
 struct OpenAIChatResponse {
-    choices: Vec<OpenAIChatChoice>,
+    choices: Option<Vec<OpenAIChatChoice>>,
+    error: Option<OpenAIError>,
 }
 
 #[derive(Deserialize)]
 struct OpenAIChatChoice {
     message: OpenAIChatMessage,
+}
+
+#[derive(Deserialize)]
+struct OpenAIError {
+    message: String,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    code: Option<String>,
 }
 
 fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Result<String> {
@@ -1133,10 +1142,27 @@ fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Re
         .json(&request)
         .send()?;
 
+    // Check HTTP status first
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+        anyhow::bail!("API error ({}): {}", status, error_text);
+    }
+
     let result: OpenAIChatResponse = response.json()?;
 
-    if let Some(choice) = result.choices.first() {
-        Ok(choice.message.content.clone())
+    // Check for API error in response
+    if let Some(error) = result.error {
+        anyhow::bail!("API error: {}", error.message);
+    }
+
+    // Get the response message
+    if let Some(choices) = result.choices {
+        if let Some(choice) = choices.first() {
+            Ok(choice.message.content.clone())
+        } else {
+            anyhow::bail!("No choices in API response")
+        }
     } else {
         anyhow::bail!("No response from API")
     }
