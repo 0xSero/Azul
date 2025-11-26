@@ -169,15 +169,39 @@ impl Summarizer {
         Self { provider }
     }
 
-    /// Create a summarizer from environment config
-    pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("OPENROUTER_API_KEY").ok()?;
+    /// Create a summarizer from config
+    pub fn from_config(config: &crate::config::Config) -> Option<Self> {
+        let api_key = config.get_api_key()?.to_string();
         if api_key.is_empty() {
             return None;
         }
 
-        let provider = OpenRouterProvider::new(api_key, None).ok()?;
+        // Get model and fallback models from config
+        let model = config.get_ai_model().map(String::from);
+        let fallback_models = config.get_fallback_models();
+
+        // Build models list: primary model + fallback models
+        let mut models = Vec::new();
+        if let Some(m) = model {
+            models.push(m);
+        }
+        if let Some(fallback) = fallback_models {
+            models.extend(fallback);
+        }
+
+        // If no models specified, use the default primary model
+        if models.is_empty() {
+            models.push("qwen/qwen3-235b-a22b:free".to_string());
+        }
+
+        let provider = OpenRouterProvider::new(api_key, Some(models)).ok()?;
         Some(Self::new(Box::new(provider)))
+    }
+
+    /// Create a summarizer from environment config (deprecated, use from_config)
+    pub fn from_env() -> Option<Self> {
+        let config = crate::config::Config::load().ok()?;
+        Self::from_config(&config)
     }
 
     /// Summarize search results
