@@ -2,8 +2,11 @@ mod ai;
 mod app;
 mod browser;
 mod config;
+mod mascot;
 mod scrape;
 mod search;
+mod storage;
+mod tabs;
 mod ui;
 
 use anyhow::{Context, Result};

@@ -6,14 +6,20 @@ use std::sync::Arc;
 use crate::ai::Summarizer;
 use crate::browser::{Browser, Page, RenderMode};
 use crate::config::Config;
+use crate::mascot::{Mascot, MascotState};
 use crate::search::{self, QueryTarget, SearchManager};
 use crate::scrape;
+use crate::storage::{Bookmark, Database, HistoryEntry};
+use crate::tabs::TabManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Content,
     Sidebar,
     URLBar,
+    TabBar,
+    Bookmarks,
+    History,
 }
 
 impl Focus {
@@ -22,6 +28,9 @@ impl Focus {
             Focus::Content => Focus::Sidebar,
             Focus::Sidebar => Focus::URLBar,
             Focus::URLBar => Focus::Content,
+            Focus::TabBar => Focus::Content,
+            Focus::Bookmarks => Focus::Content,
+            Focus::History => Focus::Content,
         }
     }
 
@@ -30,34 +39,55 @@ impl Focus {
             Focus::Content => Focus::URLBar,
             Focus::Sidebar => Focus::Content,
             Focus::URLBar => Focus::Sidebar,
+            Focus::TabBar => Focus::Content,
+            Focus::Bookmarks => Focus::Content,
+            Focus::History => Focus::Content,
         }
     }
 }
 
 pub enum AppMessage {
-    PageLoaded(Page),
-    LoadError(String),
+    PageLoaded(usize, Page), // tab_id, page
+    LoadError(usize, String),
     AiSummary(String),
     AiError(String),
 }
 
+/// Panel mode for overlays
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelMode {
+    None,
+    Bookmarks,
+    History,
+    Help,
+}
+
 pub struct App {
     pub config: Config,
-    pub current_page: Option<Page>,
-    pub url_input: String,
     pub focus: Focus,
     pub should_quit: bool,
     pub animation_tick: usize,
-    pub loading: bool,
     pub status_message: String,
-    pub scroll_offset: usize,
-    pub sidebar_selected: usize,
-    pub sidebar_offset: usize,
-    pub show_help: bool,
     pub view_mode: ViewMode,
     pub format_text: bool,
     pub ai_summary: Option<String>,
-    pub render_mode: RenderMode,
+    pub panel_mode: PanelMode,
+
+    // Tabs
+    pub tabs: TabManager,
+    pub url_input: String,
+
+    // Mascot
+    pub mascot: Mascot,
+
+    // Storage
+    pub db: Option<Database>,
+    pub bookmarks_list: Vec<Bookmark>,
+    pub history_list: Vec<HistoryEntry>,
+    pub bookmarks_selected: usize,
+    pub history_selected: usize,
+
+    // Message passing
     page_rx: Receiver<AppMessage>,
     page_tx: Sender<AppMessage>,
     summarizer: Option<Arc<Summarizer>>,
@@ -74,55 +104,131 @@ impl App {
         let config = Config::load()?;
         let (page_tx, page_rx) = channel();
 
-        Ok(Self {
+        // Try to open database, but don't fail if it errors
+        let db = Database::open().ok();
+
+        let mut app = Self {
             config,
-            current_page: None,
-            url_input: String::new(),
             focus: Focus::Content,
             should_quit: false,
             animation_tick: 0,
-            loading: false,
-            status_message: "Ready - Press / to enter URL or search | J to toggle JS mode".to_string(),
-            scroll_offset: 0,
-            sidebar_selected: 0,
-            sidebar_offset: 0,
-            show_help: false,
+            status_message: "Ready - / search | t new tab | b bookmarks | h history | ? help".to_string(),
             view_mode: ViewMode::Rendered,
             format_text: true,
             ai_summary: None,
-            render_mode: RenderMode::Auto, // Auto-detect JS needs
+            panel_mode: PanelMode::None,
+            tabs: TabManager::new(),
+            url_input: String::new(),
+            mascot: Mascot::new(),
+            db,
+            bookmarks_list: Vec::new(),
+            history_list: Vec::new(),
+            bookmarks_selected: 0,
+            history_selected: 0,
             page_rx,
             page_tx,
             summarizer: Summarizer::from_env().map(Arc::new),
-        })
+        };
+
+        // Load bookmarks and history
+        app.refresh_bookmarks();
+        app.refresh_history();
+
+        Ok(app)
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CONVENIENCE ACCESSORS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Get current page from active tab
+    pub fn current_page(&self) -> Option<&Page> {
+        self.tabs.active_tab().and_then(|t| t.page.as_ref())
+    }
+
+    /// Get current scroll offset from active tab
+    pub fn scroll_offset(&self) -> usize {
+        self.tabs.active_tab().map(|t| t.scroll_offset).unwrap_or(0)
+    }
+
+    /// Set scroll offset on active tab
+    fn set_scroll_offset(&mut self, offset: usize) {
+        if let Some(tab) = self.tabs.active_tab_mut() {
+            tab.scroll_offset = offset;
+        }
+    }
+
+    /// Get sidebar selected from active tab
+    pub fn sidebar_selected(&self) -> usize {
+        self.tabs.active_tab().map(|t| t.sidebar_selected).unwrap_or(0)
+    }
+
+    /// Set sidebar selected on active tab
+    fn set_sidebar_selected(&mut self, idx: usize) {
+        if let Some(tab) = self.tabs.active_tab_mut() {
+            tab.sidebar_selected = idx;
+        }
+    }
+
+    /// Check if current tab is loading
+    pub fn loading(&self) -> bool {
+        self.tabs.active_tab().map(|t| t.loading).unwrap_or(false)
+    }
+
+    /// Get current render mode from active tab
+    pub fn render_mode(&self) -> RenderMode {
+        self.tabs.active_tab().map(|t| t.render_mode).unwrap_or(RenderMode::Auto)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // UPDATE LOOP
+    // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn update(&mut self) {
         self.animation_tick = self.animation_tick.wrapping_add(1);
+        self.mascot.tick();
 
         // Check for loaded pages
         while let Ok(msg) = self.page_rx.try_recv() {
             match msg {
-                AppMessage::PageLoaded(page) => {
-                    self.loading = false;
-                    self.status_message = format!("Loaded: {}", page.url);
-                    self.current_page = Some(page);
-                    self.scroll_offset = 0;
-                    self.sidebar_selected = 0;
+                AppMessage::PageLoaded(tab_id, page) => {
+                    // Find and update the tab
+                    for i in 0..self.tabs.count() {
+                        if let Some(tab) = self.tabs.get_tab_mut(i) {
+                            if tab.id == tab_id {
+                                // Add to history
+                                if let Some(db) = &self.db {
+                                    let _ = db.add_history(&page.url, &page.title);
+                                }
+                                tab.set_page(page);
+                                self.mascot.set_state(MascotState::Success);
+                                self.status_message = format!("Loaded: {}", tab.url);
+                                break;
+                            }
+                        }
+                    }
                     self.ai_summary = None;
                 }
-                AppMessage::LoadError(err) => {
-                    self.loading = false;
-                    self.status_message = format!("Error: {}", err);
+                AppMessage::LoadError(tab_id, err) => {
+                    for i in 0..self.tabs.count() {
+                        if let Some(tab) = self.tabs.get_tab_mut(i) {
+                            if tab.id == tab_id {
+                                tab.set_error(err.clone());
+                                self.mascot.set_state(MascotState::Error);
+                                self.status_message = format!("Error: {}", err);
+                                break;
+                            }
+                        }
+                    }
                 }
                 AppMessage::AiSummary(summary) => {
-                    self.loading = false;
                     self.ai_summary = Some(summary);
                     self.status_message = "AI summary ready".to_string();
+                    self.mascot.set_state(MascotState::Success);
                 }
                 AppMessage::AiError(err) => {
-                    self.loading = false;
                     self.status_message = format!("AI error: {}", err);
+                    self.mascot.set_state(MascotState::Error);
                 }
             }
         }
@@ -142,7 +248,23 @@ impl App {
         self.update_status();
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // KEY HANDLING
+    // ═══════════════════════════════════════════════════════════════════════════
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Panel-specific handling first
+        match self.panel_mode {
+            PanelMode::Bookmarks => return self.handle_bookmarks_keys(key),
+            PanelMode::History => return self.handle_history_keys(key),
+            PanelMode::Help => {
+                // Any key closes help
+                self.panel_mode = PanelMode::None;
+                return Ok(());
+            }
+            PanelMode::None => {}
+        }
+
         // Global shortcuts
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('Q'), KeyModifiers::NONE) => {
@@ -156,7 +278,7 @@ impl App {
                 return Ok(());
             }
             (KeyCode::Char('?'), KeyModifiers::NONE) => {
-                self.show_help = !self.show_help;
+                self.panel_mode = PanelMode::Help;
                 return Ok(());
             }
             (KeyCode::Tab, KeyModifiers::NONE) => {
@@ -175,6 +297,59 @@ impl App {
                     return Ok(());
                 }
             }
+            // Tab management
+            (KeyCode::Char('t'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                if self.tabs.new_tab(None).is_some() {
+                    self.status_message = format!("New tab {} created", self.tabs.count());
+                } else {
+                    self.status_message = "Max tabs reached (9)".to_string();
+                }
+                return Ok(());
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                if self.tabs.count() > 1 {
+                    self.tabs.close_current_tab();
+                    self.status_message = "Tab closed".to_string();
+                } else {
+                    self.status_message = "Can't close last tab".to_string();
+                }
+                return Ok(());
+            }
+            (KeyCode::Char(n), KeyModifiers::ALT) if n.is_ascii_digit() => {
+                let num = n.to_digit(10).unwrap_or(0) as usize;
+                if num > 0 {
+                    self.tabs.go_to_tab(num);
+                    self.status_message = format!("Switched to tab {}", num);
+                }
+                return Ok(());
+            }
+            (KeyCode::Char('['), KeyModifiers::CONTROL) => {
+                self.tabs.prev_tab();
+                self.status_message = format!("Tab {}/{}", self.tabs.active_index() + 1, self.tabs.count());
+                return Ok(());
+            }
+            (KeyCode::Char(']'), KeyModifiers::CONTROL) => {
+                self.tabs.next_tab();
+                self.status_message = format!("Tab {}/{}", self.tabs.active_index() + 1, self.tabs.count());
+                return Ok(());
+            }
+            // Bookmarks & History
+            (KeyCode::Char('b'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.panel_mode = PanelMode::Bookmarks;
+                self.refresh_bookmarks();
+                self.bookmarks_selected = 0;
+                return Ok(());
+            }
+            (KeyCode::Char('H'), KeyModifiers::NONE) => {
+                self.panel_mode = PanelMode::History;
+                self.refresh_history();
+                self.history_selected = 0;
+                return Ok(());
+            }
+            (KeyCode::Char('B'), KeyModifiers::NONE) => {
+                self.toggle_bookmark();
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -183,20 +358,25 @@ impl App {
             Focus::Content => self.handle_content_keys(key),
             Focus::Sidebar => self.handle_sidebar_keys(key),
             Focus::URLBar => self.handle_urlbar_keys(key)?,
+            Focus::TabBar => self.handle_tab_bar_keys(key),
+            Focus::Bookmarks => {}
+            Focus::History => {}
         }
 
         Ok(())
     }
 
     fn handle_content_keys(&mut self, key: KeyEvent) {
+        let scroll = self.scroll_offset();
+
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.scroll_offset > 0 {
-                    self.scroll_offset -= 1;
+                if scroll > 0 {
+                    self.set_scroll_offset(scroll - 1);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_offset += 1;
+                self.set_scroll_offset(scroll + 1);
             }
             KeyCode::Char('f') => {
                 self.format_text = !self.format_text;
@@ -215,7 +395,7 @@ impl App {
                     ViewMode::Rendered => "Viewing formatted content".to_string(),
                     ViewMode::Raw => "Viewing raw page source".to_string(),
                 };
-                self.scroll_offset = 0;
+                self.set_scroll_offset(0);
             }
             KeyCode::Char('s') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -227,31 +407,53 @@ impl App {
                 }
             }
             KeyCode::Char('g') => {
-                self.scroll_offset = 0;
+                self.set_scroll_offset(0);
             }
             KeyCode::Char('G') => {
-                if let Some(page) = &self.current_page {
-                    self.scroll_offset = page.content_lines.len().saturating_sub(1);
+                if let Some(page) = self.current_page() {
+                    self.set_scroll_offset(page.content_lines.len().saturating_sub(1));
                 }
             }
             KeyCode::Char('J') => {
                 // Toggle JavaScript rendering mode
-                self.render_mode = match self.render_mode {
-                    RenderMode::Static => RenderMode::Auto,
-                    RenderMode::Auto => RenderMode::JavaScript,
-                    RenderMode::JavaScript => RenderMode::Static,
-                };
-                self.status_message = match self.render_mode {
-                    RenderMode::Static => "JS Mode: OFF (fast HTTP only)".to_string(),
-                    RenderMode::Auto => "JS Mode: AUTO (detect & render if needed)".to_string(),
-                    RenderMode::JavaScript => "JS Mode: ON (always use headless Chrome)".to_string(),
-                };
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.render_mode = match tab.render_mode {
+                        RenderMode::Static => RenderMode::Auto,
+                        RenderMode::Auto => RenderMode::JavaScript,
+                        RenderMode::JavaScript => RenderMode::Static,
+                    };
+                    self.status_message = match tab.render_mode {
+                        RenderMode::Static => "JS Mode: OFF (fast HTTP only)".to_string(),
+                        RenderMode::Auto => "JS Mode: AUTO (detect & render if needed)".to_string(),
+                        RenderMode::JavaScript => "JS Mode: ON (always use headless Chrome)".to_string(),
+                    };
+                }
             }
             KeyCode::Char('r') => {
                 // Reload current page
-                if let Some(page) = &self.current_page {
-                    self.url_input = page.url.clone();
-                    self.navigate();
+                if let Some(tab) = self.tabs.active_tab() {
+                    if !tab.url.is_empty() {
+                        self.url_input = tab.url.clone();
+                        self.navigate();
+                    }
+                }
+            }
+            KeyCode::Left | KeyCode::Char('p') => {
+                // Go back in history
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    if let Some(url) = tab.go_back() {
+                        self.url_input = url;
+                        self.navigate_internal(false);
+                    }
+                }
+            }
+            KeyCode::Right | KeyCode::Char('n') => {
+                // Go forward in history
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    if let Some(url) = tab.go_forward() {
+                        self.url_input = url;
+                        self.navigate_internal(false);
+                    }
                 }
             }
             KeyCode::Char('2') | KeyCode::F(2) => {
@@ -263,32 +465,34 @@ impl App {
     }
 
     fn handle_sidebar_keys(&mut self, key: KeyEvent) {
+        let selected = self.sidebar_selected();
+
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.sidebar_selected > 0 {
-                    self.sidebar_selected -= 1;
+                if selected > 0 {
+                    self.set_sidebar_selected(selected - 1);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(page) = &self.current_page {
-                    if self.sidebar_selected < page.links.len().saturating_sub(1) {
-                        self.sidebar_selected += 1;
+                if let Some(page) = self.current_page() {
+                    if selected < page.links.len().saturating_sub(1) {
+                        self.set_sidebar_selected(selected + 1);
                     }
                 }
             }
             KeyCode::Char('g') => {
-                self.sidebar_selected = 0;
+                self.set_sidebar_selected(0);
             }
             KeyCode::Char('G') => {
-                if let Some(page) = &self.current_page {
+                if let Some(page) = self.current_page() {
                     if !page.links.is_empty() {
-                        self.sidebar_selected = page.links.len().saturating_sub(1);
+                        self.set_sidebar_selected(page.links.len().saturating_sub(1));
                     }
                 }
             }
             KeyCode::Enter => {
-                if let Some(page) = &self.current_page {
-                    if let Some(link) = page.links.get(self.sidebar_selected) {
+                if let Some(page) = self.current_page() {
+                    if let Some(link) = page.links.get(selected) {
                         self.url_input = link.url.clone();
                         self.navigate();
                     }
@@ -324,52 +528,166 @@ impl App {
         Ok(())
     }
 
+    fn handle_tab_bar_keys(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.tabs.prev_tab();
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.tabs.next_tab();
+            }
+            KeyCode::Enter => {
+                self.focus = Focus::Content;
+            }
+            KeyCode::Char('x') => {
+                if self.tabs.count() > 1 {
+                    self.tabs.close_current_tab();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_bookmarks_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('b') | KeyCode::Char('q') => {
+                self.panel_mode = PanelMode::None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.bookmarks_selected > 0 {
+                    self.bookmarks_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.bookmarks_selected < self.bookmarks_list.len().saturating_sub(1) {
+                    self.bookmarks_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(bookmark) = self.bookmarks_list.get(self.bookmarks_selected) {
+                    self.url_input = bookmark.url.clone();
+                    self.panel_mode = PanelMode::None;
+                    self.navigate();
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                if let Some(bookmark) = self.bookmarks_list.get(self.bookmarks_selected) {
+                    if let Some(db) = &self.db {
+                        let _ = db.remove_bookmark(&bookmark.url);
+                        self.refresh_bookmarks();
+                        if self.bookmarks_selected > 0 {
+                            self.bookmarks_selected -= 1;
+                        }
+                        self.status_message = "Bookmark removed".to_string();
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_history_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
+                self.panel_mode = PanelMode::None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.history_selected > 0 {
+                    self.history_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.history_selected < self.history_list.len().saturating_sub(1) {
+                    self.history_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(entry) = self.history_list.get(self.history_selected) {
+                    self.url_input = entry.url.clone();
+                    self.panel_mode = PanelMode::None;
+                    self.navigate();
+                }
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(db) = &self.db {
+                    let _ = db.clear_history();
+                    self.refresh_history();
+                    self.status_message = "History cleared".to_string();
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NAVIGATION
+    // ═══════════════════════════════════════════════════════════════════════════
+
     fn navigate(&mut self) {
+        self.navigate_internal(true);
+    }
+
+    fn navigate_internal(&mut self, add_to_history: bool) {
         if self.url_input.is_empty() {
             return;
         }
 
-        self.loading = true;
         let input = self.url_input.trim().to_string();
-        self.scroll_offset = 0;
-        self.sidebar_selected = 0;
         self.ai_summary = None;
+        self.mascot.set_state(MascotState::Loading);
+
+        // Get current tab info
+        let tab_id = self.tabs.active_tab().map(|t| t.id).unwrap_or(0);
+        let render_mode = self.render_mode();
+
+        // Update tab state
+        if add_to_history {
+            if let Some(tab) = self.tabs.active_tab_mut() {
+                tab.navigate(&input);
+            }
+        } else {
+            if let Some(tab) = self.tabs.active_tab_mut() {
+                tab.loading = true;
+                tab.error = None;
+            }
+        }
 
         let tx = self.page_tx.clone();
 
         match search::classify_query(&input) {
             QueryTarget::Url(url) => {
-                let mode_str = match self.render_mode {
+                let mode_str = match render_mode {
                     RenderMode::Static => "",
                     RenderMode::Auto => " [auto-JS]",
                     RenderMode::JavaScript => " [JS]",
                 };
                 self.status_message = format!("Loading{}: {}", mode_str, url);
+                self.mascot.set_state(MascotState::Loading);
 
-                let render_mode = self.render_mode;
-
-                // Spawn background thread to fetch page
                 std::thread::spawn(move || {
                     let browser = match Browser::new() {
                         Ok(b) => b,
                         Err(e) => {
-                            let _ = tx.send(AppMessage::LoadError(format!("Browser init error: {}", e)));
+                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Browser init error: {}", e)));
                             return;
                         }
                     };
 
                     match browser.fetch_with_mode(&url, render_mode) {
                         Ok(page) => {
-                            let _ = tx.send(AppMessage::PageLoaded(page));
+                            let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
                         }
                         Err(err) => {
-                            let _ = tx.send(AppMessage::LoadError(format!("Fetch error: {}", err)));
+                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Fetch error: {}", err)));
                         }
                     }
                 });
             }
             QueryTarget::Search { engine, query } => {
                 self.status_message = format!("Searching {}: {}", engine.name(), query);
+                self.mascot.set_state(MascotState::Searching);
 
                 std::thread::spawn(move || {
                     let search_result =
@@ -378,18 +696,75 @@ impl App {
                     match search_result {
                         Ok(response) => {
                             let page = search::results_to_page(response);
-                            let _ = tx.send(AppMessage::PageLoaded(page));
+                            let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
                         }
                         Err(err) => {
-                            let _ = tx.send(AppMessage::LoadError(format!("Search error: {}", err)));
+                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Search error: {}", err)));
                         }
                     }
                 });
             }
         }
-
-        self.sidebar_offset = 0;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BOOKMARKS & HISTORY
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    fn toggle_bookmark(&mut self) {
+        let Some(db) = &self.db else {
+            self.status_message = "Database not available".to_string();
+            return;
+        };
+
+        let Some(page) = self.current_page() else {
+            self.status_message = "No page to bookmark".to_string();
+            return;
+        };
+
+        let url = page.url.clone();
+        let title = page.title.clone();
+
+        match db.is_bookmarked(&url) {
+            Ok(true) => {
+                if db.remove_bookmark(&url).is_ok() {
+                    self.status_message = "Bookmark removed".to_string();
+                }
+            }
+            Ok(false) => {
+                if db.add_bookmark(&url, &title, &[]).is_ok() {
+                    self.status_message = "Bookmarked!".to_string();
+                }
+            }
+            Err(_) => {
+                self.status_message = "Bookmark error".to_string();
+            }
+        }
+        self.refresh_bookmarks();
+    }
+
+    fn refresh_bookmarks(&mut self) {
+        if let Some(db) = &self.db {
+            self.bookmarks_list = db.list_bookmarks(None, 100).unwrap_or_default();
+        }
+    }
+
+    fn refresh_history(&mut self) {
+        if let Some(db) = &self.db {
+            self.history_list = db.list_history(None, 100).unwrap_or_default();
+        }
+    }
+
+    /// Check if current URL is bookmarked
+    pub fn is_current_bookmarked(&self) -> bool {
+        let Some(db) = &self.db else { return false };
+        let Some(page) = self.current_page() else { return false };
+        db.is_bookmarked(&page.url).unwrap_or(false)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AI & SCRAPING
+    // ═══════════════════════════════════════════════════════════════════════════
 
     fn request_ai_summary(&mut self) -> Result<()> {
         let Some(summarizer) = &self.summarizer else {
@@ -397,7 +772,7 @@ impl App {
             return Ok(());
         };
 
-        let Some(page) = &self.current_page else {
+        let Some(page) = self.current_page() else {
             self.status_message = "No page to summarize".to_string();
             return Ok(());
         };
@@ -408,7 +783,7 @@ impl App {
         let tx = self.page_tx.clone();
         let summarizer = Arc::clone(summarizer);
 
-        self.loading = true;
+        self.mascot.set_state(MascotState::Loading);
         self.status_message = "Summarizing page with AI...".to_string();
 
         std::thread::spawn(move || {
@@ -426,7 +801,7 @@ impl App {
     }
 
     fn scrape_current_page(&mut self) -> Result<()> {
-        let Some(page) = &self.current_page else {
+        let Some(page) = self.current_page() else {
             self.status_message = "No page to scrape".to_string();
             return Ok(());
         };
@@ -446,8 +821,11 @@ impl App {
     fn update_status(&mut self) {
         self.status_message = match self.focus {
             Focus::Content => "Content - j/k scroll | / search | 2 sidebar | ? help".to_string(),
-            Focus::Sidebar => "Sidebar - j/k navigate | ⏎ open | 1 content".to_string(),
-            Focus::URLBar => "URL Bar - ⏎ go | Esc cancel".to_string(),
+            Focus::Sidebar => "Sidebar - j/k navigate | Enter open | 1 content".to_string(),
+            Focus::URLBar => "URL Bar - Enter go | Esc cancel".to_string(),
+            Focus::TabBar => "Tab Bar - h/l switch | x close | Enter select".to_string(),
+            Focus::Bookmarks => "Bookmarks - j/k nav | Enter open | d delete | Esc close".to_string(),
+            Focus::History => "History - j/k nav | Enter open | Ctrl+C clear | Esc close".to_string(),
         };
     }
 }

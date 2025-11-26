@@ -1,17 +1,28 @@
 mod neon;
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Focus};
-use crate::app::ViewMode;
+use crate::app::{App, Focus, PanelMode, ViewMode};
+use crate::mascot;
 use neon::NeonBorder;
+
+// Tokyo Night color palette
+const AZUL_BLUE: Color = Color::Rgb(0, 191, 255);
+const TOKYO_BLUE: Color = Color::Rgb(122, 162, 247);
+const TOKYO_PURPLE: Color = Color::Rgb(187, 154, 247);
+const TOKYO_ORANGE: Color = Color::Rgb(255, 169, 0);
+const TOKYO_GREEN: Color = Color::Rgb(158, 206, 106);
+const TOKYO_RED: Color = Color::Rgb(247, 118, 142);
+const TOKYO_TEXT: Color = Color::Rgb(192, 202, 245);
+const TOKYO_COMMENT: Color = Color::Rgb(125, 137, 168);
+const TOKYO_BG: Color = Color::Rgb(26, 27, 38);
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
@@ -32,37 +43,97 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         vertical: 1,
     });
 
-    // Main layout: Title | URL Bar | Content | Status
+    // Main layout: Tab Bar | Title | URL Bar | Content | Status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Title bar
-            Constraint::Length(3),  // URL bar
-            Constraint::Min(0),      // Main content (fills all remaining space)
-            Constraint::Length(3),  // Status bar
+            Constraint::Length(1),   // Tab bar
+            Constraint::Length(3),   // Title bar
+            Constraint::Length(3),   // URL bar
+            Constraint::Min(0),      // Main content
+            Constraint::Length(3),   // Status bar
         ])
         .split(inner);
 
-    render_title(frame, chunks[0], app);
-    render_url_bar(frame, chunks[1], app);
-    render_main_content(frame, chunks[2], app);
-    render_status_bar(frame, chunks[3], app);
+    render_tab_bar(frame, chunks[0], app);
+    render_title(frame, chunks[1], app);
+    render_url_bar(frame, chunks[2], app);
+    render_main_content(frame, chunks[3], app);
+    render_status_bar(frame, chunks[4], app);
+
+    // Render overlay panels
+    match app.panel_mode {
+        PanelMode::Bookmarks => render_bookmarks_panel(frame, inner, app),
+        PanelMode::History => render_history_panel(frame, inner, app),
+        PanelMode::Help => render_help_panel(frame, inner, app),
+        PanelMode::None => {}
+    }
+}
+
+fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let tabs = app.tabs.tabs();
+    let active = app.tabs.active_index();
+
+    let mut spans = vec![];
+
+    for (i, tab) in tabs.iter().enumerate() {
+        let is_active = i == active;
+        let title = tab.display_title(15);
+
+        let style = if is_active {
+            Style::default().fg(TOKYO_BG).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(TOKYO_TEXT)
+        };
+
+        // Tab number
+        spans.push(Span::styled(format!(" {} ", i + 1), Style::default().fg(TOKYO_COMMENT)));
+        // Tab title
+        spans.push(Span::styled(title, style));
+
+        if tab.loading {
+            spans.push(Span::styled(" *", Style::default().fg(TOKYO_ORANGE)));
+        }
+
+        spans.push(Span::raw(" |"));
+    }
+
+    // Add new tab hint if not full
+    if !app.tabs.is_full() {
+        spans.push(Span::styled(" + (t)", Style::default().fg(TOKYO_COMMENT)));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line)
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(paragraph, area);
 }
 
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
-    let accent = Color::Rgb(0, 191, 255); // Azul blue
+    // Check if current page is bookmarked
+    let bookmark_indicator = if app.is_current_bookmarked() {
+        Span::styled(" [*]", Style::default().fg(TOKYO_ORANGE))
+    } else {
+        Span::raw("")
+    };
+
     let title = vec![
-        Span::styled("Azul", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
+        Span::styled("Azul", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
         Span::raw("-"),
-        Span::styled("Browse", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
+        Span::styled("Browse", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled("v3.0", Style::default().fg(Color::Rgb(122, 162, 247))),
+        Span::styled("v3.0", Style::default().fg(TOKYO_BLUE)),
         Span::raw(" | "),
         Span::styled(
             "Terminal Web Browser",
-            Style::default()
-                .fg(Color::Rgb(192, 202, 245))
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(TOKYO_TEXT).add_modifier(Modifier::ITALIC),
+        ),
+        bookmark_indicator,
+        Span::raw(" | "),
+        Span::styled(
+            app.mascot.view_mini(),
+            Style::default().fg(AZUL_BLUE),
         ),
     ];
 
@@ -70,29 +141,22 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(122, 162, 247))),
+                .border_style(Style::default().fg(TOKYO_BLUE)),
         )
-        .style(Style::default().fg(Color::Rgb(192, 202, 245)));
+        .style(Style::default().fg(TOKYO_TEXT));
 
     frame.render_widget(title_paragraph, area);
 }
 
 fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.focus == Focus::URLBar;
-    let border_color = if is_focused {
-        Color::Rgb(0, 191, 255) // Azul blue when focused
-    } else {
-        Color::Rgb(122, 162, 247) // Tokyo Night blue when not focused
-    };
+    let border_color = if is_focused { AZUL_BLUE } else { TOKYO_BLUE };
 
     let display_text = if is_focused {
-        // Show what user is typing with cursor
         format!("{}_", app.url_input)
-    } else if let Some(page) = &app.current_page {
-        // Show current page URL
+    } else if let Some(page) = app.current_page() {
         page.url.clone()
     } else {
-        // Placeholder
         "Press / to enter URL or search...".to_string()
     };
 
@@ -104,49 +168,37 @@ fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
                 .title(if is_focused { " URL (editing) " } else { " URL " }),
         )
         .style(if is_focused {
-            Style::default()
-                .fg(Color::Rgb(0, 191, 255))
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Rgb(192, 202, 245))
+            Style::default().fg(TOKYO_TEXT)
         });
 
     frame.render_widget(url_paragraph, area);
 }
 
 fn render_main_content(frame: &mut Frame, area: Rect, app: &mut App) {
-    if app.show_help {
-        render_help(frame, area);
-        return;
-    }
-
     // Split into content and sidebar
-    let has_sidebar = app.current_page.as_ref().map(|p| !p.links.is_empty()).unwrap_or(false);
+    let has_sidebar = app.current_page().map(|p| !p.links.is_empty()).unwrap_or(false);
 
     if has_sidebar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(70),  // Content
-                Constraint::Percentage(30),  // Sidebar
+                Constraint::Percentage(70),
+                Constraint::Percentage(30),
             ])
             .split(area);
 
-        render_content_area(frame, chunks[0], &*app);
-        // render_sidebar needs mutable access to keep the selection in view
+        render_content_area(frame, chunks[0], app);
         render_sidebar(frame, chunks[1], app);
     } else {
-        render_content_area(frame, area, &*app);
+        render_content_area(frame, area, app);
     }
 }
 
 fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.focus == Focus::Content;
-    let border_color = if is_focused {
-        Color::Rgb(0, 191, 255) // Azul blue when focused
-    } else {
-        Color::Rgb(122, 162, 247) // Tokyo Night blue when not focused
-    };
+    let border_color = if is_focused { AZUL_BLUE } else { TOKYO_BLUE };
 
     let mode_label = match app.view_mode {
         ViewMode::Rendered => "content",
@@ -162,19 +214,16 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
             format!(" {} ", mode_label)
         });
 
-    if let Some(page) = &app.current_page {
-        // Calculate visible range
+    if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
         let visible_height = inner.height as usize;
-        let wrap_width = inner.width.saturating_sub(2).max(20) as usize; // leave padding
+        let wrap_width = inner.width.saturating_sub(2).max(20) as usize;
 
-        // Choose base lines based on view mode
         let mut lines: Vec<String> = match app.view_mode {
             ViewMode::Rendered => page.content_lines.clone(),
             ViewMode::Raw => page.raw_content.lines().map(|s| s.to_string()).collect(),
         };
 
-        // Optional re-formatting for readability
         if app.view_mode == ViewMode::Rendered && app.format_text {
             lines = format_lines(&lines, wrap_width);
         }
@@ -193,7 +242,8 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         }
 
         let total_lines = lines.len().max(1);
-        let start = app.scroll_offset.min(total_lines.saturating_sub(1));
+        let scroll = app.scroll_offset();
+        let start = scroll.min(total_lines.saturating_sub(1));
         let end = (start + visible_height).min(total_lines);
 
         let visible_lines: Vec<Line> = lines[start..end]
@@ -203,15 +253,17 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
         let content = Paragraph::new(visible_lines)
             .block(block)
-            .style(Style::default().fg(Color::Rgb(192, 202, 245)))
+            .style(Style::default().fg(TOKYO_TEXT))
             .wrap(Wrap { trim: false });
 
         frame.render_widget(content, area);
     } else {
-        let placeholder = Paragraph::new("Press / to enter a URL or search")
+        // Show splash with mascot when no page loaded
+        let splash_text = mascot::mini_splash();
+        let placeholder = Paragraph::new(splash_text)
             .block(block)
-            .style(Style::default().fg(Color::Rgb(125, 137, 168)))
-            .alignment(ratatui::layout::Alignment::Center);
+            .style(Style::default().fg(AZUL_BLUE))
+            .alignment(Alignment::Center);
 
         frame.render_widget(placeholder, area);
     }
@@ -219,26 +271,15 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     let is_focused = app.focus == Focus::Sidebar;
-    let border_color = if is_focused {
-        Color::Rgb(255, 169, 0) // Orange when focused
-    } else {
-        Color::Rgb(122, 162, 247)
-    };
+    let border_color = if is_focused { TOKYO_ORANGE } else { TOKYO_BLUE };
 
-    let total_links = app
-        .current_page
-        .as_ref()
-        .map(|p| p.links.len())
-        .unwrap_or(0);
+    let total_links = app.current_page().map(|p| p.links.len()).unwrap_or(0);
+    let selected = app.sidebar_selected();
 
-    let position = if total_links == 0 {
-        0
-    } else {
-        app.sidebar_selected + 1
-    };
+    let position = if total_links == 0 { 0 } else { selected + 1 };
 
     let title = if is_focused {
-        format!(" LINKS {}/{}  j/k navigate, ⏎ open ", position, total_links)
+        format!(" LINKS {}/{} ", position, total_links)
     } else {
         format!(" links {}/{} ", position, total_links)
     };
@@ -248,31 +289,22 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
         .border_style(Style::default().fg(border_color))
         .title(title);
 
-    if let Some(page) = &app.current_page {
+    if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
-        // Leave space for block title; inner.height accounts for borders
         let mut visible_rows = inner.height.saturating_sub(1) as usize;
         if visible_rows == 0 {
             visible_rows = 1;
         }
 
-        let mut offset = app.sidebar_offset;
-        if app.sidebar_selected < offset {
-            offset = app.sidebar_selected;
-        } else if app.sidebar_selected >= offset + visible_rows {
-            offset = app.sidebar_selected + 1 - visible_rows;
+        // Calculate offset for scrolling
+        let mut offset = 0;
+        if selected >= visible_rows {
+            offset = selected + 1 - visible_rows;
         }
-        let max_offset = total_links.saturating_sub(visible_rows);
-        offset = offset.min(max_offset);
-        app.sidebar_offset = offset;
 
-        // Build visible items
-        let accent = Color::Rgb(255, 169, 0);
-        let dim = Color::Rgb(122, 162, 247);
-        let text_color = Color::Rgb(192, 202, 245);
-        let width_for_text = inner.width.saturating_sub(6) as usize; // number + spacing + padding
+        let width_for_text = inner.width.saturating_sub(6) as usize;
 
-        let mut items: Vec<ListItem> = page
+        let items: Vec<ListItem> = page
             .links
             .iter()
             .enumerate()
@@ -288,43 +320,267 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
                 let truncated = truncate_to_width(&primary, width_for_text);
                 let number = format!("{:2}.", i + 1);
 
-                let is_selected = i == app.sidebar_selected;
+                let is_selected = i == selected;
                 let style = if is_selected && is_focused {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(accent)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(TOKYO_BG).bg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    Style::default()
-                        .fg(accent)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(text_color)
+                    Style::default().fg(TOKYO_TEXT)
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(number, Style::default().fg(dim)),
+                    Span::styled(number, Style::default().fg(TOKYO_COMMENT)),
                     Span::raw(" "),
                     Span::styled(truncated, style),
                 ]))
             })
             .collect();
 
-        if items.is_empty() {
-            items.push(ListItem::new(Span::styled(
-                "No links on this page",
-                Style::default().fg(Color::Rgb(125, 137, 168)),
-            )));
-        }
-
         let list = List::new(items)
             .block(block)
-            .style(Style::default().fg(text_color));
+            .style(Style::default().fg(TOKYO_TEXT));
 
         frame.render_widget(list, area);
     } else {
         frame.render_widget(block, area);
     }
+}
+
+fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let focus_name = match app.focus {
+        Focus::Content => "Content",
+        Focus::Sidebar => "Sidebar",
+        Focus::URLBar => "URL Bar",
+        Focus::TabBar => "Tab Bar",
+        Focus::Bookmarks => "Bookmarks",
+        Focus::History => "History",
+    };
+
+    // Tab info
+    let tab_info = format!("[{}/{}]", app.tabs.active_index() + 1, app.tabs.count());
+
+    let primary_line = Line::from(vec![
+        Span::styled(tab_info, Style::default().fg(TOKYO_PURPLE)),
+        Span::raw(" "),
+        Span::styled("Focus: ", Style::default().fg(TOKYO_TEXT)),
+        Span::styled(focus_name, Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+        Span::raw(" | "),
+        Span::styled(&app.status_message, Style::default().fg(TOKYO_TEXT)),
+    ]);
+
+    let shortcuts = "t:tab b:bookmarks H:history B:bookmark ?:help q:quit";
+    let secondary_line = Line::from(vec![
+        Span::styled(shortcuts, Style::default().fg(TOKYO_COMMENT)),
+    ]);
+
+    let status = Paragraph::new(vec![primary_line, secondary_line])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(TOKYO_BLUE)),
+        )
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(status, area);
+}
+
+fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(60, 70, area);
+
+    // Clear the area first
+    frame.render_widget(Clear, panel_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(TOKYO_ORANGE))
+        .title(format!(" Bookmarks ({}) | j/k nav | Enter open | d delete | Esc close ", app.bookmarks_list.len()))
+        .style(Style::default().bg(TOKYO_BG));
+
+    let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
+    let visible_rows = inner.height.saturating_sub(1) as usize;
+
+    if app.bookmarks_list.is_empty() {
+        let empty = Paragraph::new("No bookmarks yet. Press B to bookmark current page.")
+            .block(block)
+            .style(Style::default().fg(TOKYO_COMMENT))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, panel_area);
+        return;
+    }
+
+    // Calculate offset
+    let mut offset = 0;
+    if app.bookmarks_selected >= visible_rows {
+        offset = app.bookmarks_selected + 1 - visible_rows;
+    }
+
+    let items: Vec<ListItem> = app.bookmarks_list
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible_rows)
+        .map(|(i, bookmark)| {
+            let is_selected = i == app.bookmarks_selected;
+            let style = if is_selected {
+                Style::default().fg(TOKYO_BG).bg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TOKYO_TEXT)
+            };
+
+            let title = truncate_to_width(&bookmark.title, 40);
+            let url = truncate_to_width(&bookmark.url, 30);
+
+            ListItem::new(vec![
+                Line::from(Span::styled(format!("  {} ", title), style)),
+                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT))),
+            ])
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(block)
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(list, panel_area);
+}
+
+fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(60, 70, area);
+
+    frame.render_widget(Clear, panel_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .title(format!(" History ({}) | j/k nav | Enter open | Esc close ", app.history_list.len()))
+        .style(Style::default().bg(TOKYO_BG));
+
+    let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
+    let visible_rows = inner.height.saturating_sub(1) as usize;
+
+    if app.history_list.is_empty() {
+        let empty = Paragraph::new("No history yet. Start browsing!")
+            .block(block)
+            .style(Style::default().fg(TOKYO_COMMENT))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, panel_area);
+        return;
+    }
+
+    let mut offset = 0;
+    if app.history_selected >= visible_rows {
+        offset = app.history_selected + 1 - visible_rows;
+    }
+
+    let items: Vec<ListItem> = app.history_list
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible_rows)
+        .map(|(i, entry)| {
+            let is_selected = i == app.history_selected;
+            let style = if is_selected {
+                Style::default().fg(TOKYO_BG).bg(TOKYO_PURPLE).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TOKYO_TEXT)
+            };
+
+            let title = truncate_to_width(&entry.title, 40);
+            let url = truncate_to_width(&entry.url, 30);
+
+            ListItem::new(vec![
+                Line::from(Span::styled(format!("  {} ", title), style)),
+                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT))),
+            ])
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(block)
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(list, panel_area);
+}
+
+fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let panel_area = centered_rect(70, 80, area);
+
+    frame.render_widget(Clear, panel_area);
+
+    let mascot_view = app.mascot.view_compact();
+
+    let help_text = vec![
+        Line::from(vec![
+            Span::styled("Azul-Browse", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+            Span::raw(" - Terminal Web Browser"),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled("Navigation:", Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD))]),
+        Line::from("  / or Ctrl+L   Focus URL bar"),
+        Line::from("  j/k           Scroll content or navigate"),
+        Line::from("  g/G           Go to top/bottom"),
+        Line::from("  p/n           Go back/forward in history"),
+        Line::from("  Tab           Cycle focus"),
+        Line::from("  Enter         Open selected link"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Tabs:", Style::default().fg(TOKYO_PURPLE).add_modifier(Modifier::BOLD))]),
+        Line::from("  t             New tab"),
+        Line::from("  Ctrl+W        Close tab"),
+        Line::from("  Alt+1-9       Go to tab"),
+        Line::from("  Ctrl+[/]      Previous/next tab"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Bookmarks & History:", Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD))]),
+        Line::from("  b             Show bookmarks"),
+        Line::from("  B             Toggle bookmark"),
+        Line::from("  H             Show history"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Other:", Style::default().fg(TOKYO_BLUE).add_modifier(Modifier::BOLD))]),
+        Line::from("  v             Toggle raw view"),
+        Line::from("  J             Toggle JS rendering"),
+        Line::from("  r             Reload page"),
+        Line::from("  s             AI summarize"),
+        Line::from("  Ctrl+S        Save scrape"),
+        Line::from("  ?             Toggle help"),
+        Line::from("  q             Quit"),
+        Line::from(""),
+        Line::from(mascot_view),
+        Line::from(""),
+        Line::from(vec![Span::styled("Press any key to close", Style::default().fg(TOKYO_COMMENT))]),
+    ];
+
+    let help = Paragraph::new(help_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(AZUL_BLUE))
+                .title(" HELP ")
+                .style(Style::default().bg(TOKYO_BG)),
+        )
+        .style(Style::default().fg(TOKYO_TEXT));
+
+    frame.render_widget(help, panel_area);
+}
+
+/// Helper to create a centered rect
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn truncate_to_width(text: &str, max_width: usize) -> String {
@@ -383,90 +639,4 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
     }
 
     out
-}
-
-fn render_help(frame: &mut Frame, area: Rect) {
-    let help_text = vec![
-        Line::from(vec![Span::styled(
-            "Azul-Browse Keyboard Shortcuts",
-            Style::default()
-                .fg(Color::Rgb(0, 191, 255))
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Navigation:", Style::default().add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from("  / or Ctrl+L  - Focus URL bar"),
-        Line::from("  j/k or ↓/↑   - Scroll content or navigate links"),
-        Line::from("  g/G          - Go to top/bottom"),
-        Line::from("  Tab/Shift+Tab - Cycle focus"),
-        Line::from("  1 or F1      - Focus content"),
-        Line::from("  2 or F2      - Focus sidebar"),
-        Line::from("  Enter        - Open selected link (in sidebar)"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Other:", Style::default().add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from("  v            - Toggle raw/source view"),
-        Line::from("  f            - Toggle text re-formatting"),
-        Line::from("  s            - Summarize current page (AI)"),
-        Line::from("  Ctrl+S       - Save scrape to scrapes/*.json"),
-        Line::from("  ?            - Toggle this help"),
-        Line::from("  q or Ctrl+C  - Quit"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Press ? to close", Style::default().fg(Color::Rgb(125, 137, 168))),
-        ]),
-    ];
-
-    let help = Paragraph::new(help_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(0, 191, 255)))
-                .title(" HELP "),
-        )
-        .style(Style::default().fg(Color::Rgb(192, 202, 245)))
-        .alignment(ratatui::layout::Alignment::Left);
-
-    frame.render_widget(help, area);
-}
-
-fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let focus_name = match app.focus {
-        Focus::Content => "Content",
-        Focus::Sidebar => "Sidebar",
-        Focus::URLBar => "URL Bar",
-    };
-
-    let accent = Color::Rgb(0, 191, 255);
-    let text = Color::Rgb(192, 202, 245);
-
-    let primary_line = Line::from(vec![
-        Span::styled("Focus: ", Style::default().fg(text)),
-        Span::styled(focus_name, Style::default().fg(accent).add_modifier(Modifier::BOLD)),
-        Span::raw(" | "),
-        Span::styled(&app.status_message, Style::default().fg(text)),
-    ]);
-
-    let url_display = if app.focus == Focus::URLBar {
-        format!("URL: {}_", app.url_input)
-    } else if let Some(page) = &app.current_page {
-        format!("URL: {}", page.url)
-    } else {
-        String::new()
-    };
-
-    let secondary_line = Line::from(vec![Span::raw(url_display)]);
-
-    let status = Paragraph::new(vec![primary_line, secondary_line])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(122, 162, 247))),
-        )
-        .style(Style::default().fg(text));
-
-    frame.render_widget(status, area);
 }
