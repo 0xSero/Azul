@@ -951,9 +951,9 @@ impl App {
                     if let Some(session) = &mut self.chat_session {
                         session.add_user_message(message.clone());
 
-                        // Send to AI in background
+                        // Send to AI in background with fallback support
                         let api_key = self.config.get_api_key().unwrap_or("").to_string();
-                        let model = session.model.clone();
+                        let models = session.available_models.clone();
                         let messages = session.messages.clone();
                         let tx = self.page_tx.clone();
 
@@ -961,7 +961,7 @@ impl App {
                         self.status_message = "Thinking...".to_string();
 
                         std::thread::spawn(move || {
-                            match send_chat_message(&api_key, &model, &messages) {
+                            match send_chat_message_with_fallback(&api_key, &models, &messages) {
                                 Ok(response) => {
                                     let _ = tx.send(AppMessage::ChatResponse(response));
                                 }
@@ -1166,4 +1166,42 @@ fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Re
     } else {
         anyhow::bail!("No response from API")
     }
+}
+
+fn send_chat_message_with_fallback(api_key: &str, models: &[String], messages: &[ChatMessage]) -> Result<String> {
+    let mut errors = Vec::new();
+
+    for (i, model) in models.iter().enumerate() {
+        match send_chat_message(api_key, model, messages) {
+            Ok(response) => {
+                if i > 0 {
+                    // Used a fallback model
+                    eprintln!("Fallback: Using model {} after {} failures", model, i);
+                }
+                return Ok(response);
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                let is_rate_limit = error_msg.contains("429")
+                    || error_msg.contains("rate limit")
+                    || error_msg.contains("Rate limit")
+                    || error_msg.contains("Too Many Requests");
+
+                errors.push(format!("{}: {}", model, error_msg));
+
+                // If it's a rate limit, try next model
+                if is_rate_limit {
+                    eprintln!("Rate limit hit on {}, trying next model...", model);
+                    continue;
+                }
+
+                // If it's not a rate limit, fail immediately
+                // (e.g., invalid API key, network error)
+                return Err(e);
+            }
+        }
+    }
+
+    // All models failed
+    anyhow::bail!("All models failed:\n{}", errors.join("\n"))
 }
