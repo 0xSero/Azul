@@ -14,6 +14,7 @@ pub trait Provider: Send + Sync {
 pub struct OpenRouterProvider {
     api_key: String,
     models: Vec<String>,
+    base_url: String,
     client: reqwest::blocking::Client,
 }
 
@@ -59,17 +60,19 @@ pub fn default_fallback_models() -> Vec<String> {
 }
 
 impl OpenRouterProvider {
-    pub fn new(api_key: String, models: Option<Vec<String>>) -> Result<Self> {
+    pub fn new(api_key: String, models: Option<Vec<String>>, base_url: Option<String>) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
             .context("Failed to create HTTP client")?;
 
         let models = models.unwrap_or_else(default_fallback_models);
+        let base_url = base_url.unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
 
         Ok(Self {
             api_key,
             models,
+            base_url,
             client,
         })
     }
@@ -97,9 +100,10 @@ impl OpenRouterProvider {
             stream: false,
         };
 
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let response = self
             .client
-            .post("https://openrouter.ai/api/v1/chat/completions")
+            .post(&url)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("HTTP-Referer", "https://github.com/ser/azul-browse")
@@ -179,6 +183,7 @@ impl Summarizer {
         // Get model and fallback models from config
         let model = config.get_ai_model().map(String::from);
         let fallback_models = config.get_fallback_models();
+        let base_url = config.get_ai_base_url().map(String::from);
 
         // Build models list: primary model + fallback models
         let mut models = Vec::new();
@@ -194,7 +199,7 @@ impl Summarizer {
             models.push("qwen/qwen3-235b-a22b:free".to_string());
         }
 
-        let provider = OpenRouterProvider::new(api_key, Some(models)).ok()?;
+        let provider = OpenRouterProvider::new(api_key, Some(models), base_url).ok()?;
         Some(Self::new(Box::new(provider)))
     }
 

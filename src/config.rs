@@ -41,6 +41,8 @@ pub struct AIConfig {
     pub models: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_models: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 fn default_accent() -> String {
@@ -118,6 +120,7 @@ impl Config {
                 model: None,
                 models: None,
                 fallback_models: None,
+                base_url: None,
             });
         }
 
@@ -227,6 +230,11 @@ impl Config {
     /// Get fallback models
     pub fn get_fallback_models(&self) -> Option<Vec<String>> {
         self.ai.as_ref()?.fallback_models.clone()
+    }
+
+    /// Get the AI base URL
+    pub fn get_ai_base_url(&self) -> Option<&str> {
+        self.ai.as_ref()?.base_url.as_deref()
     }
 }
 

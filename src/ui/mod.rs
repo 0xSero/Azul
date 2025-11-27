@@ -60,15 +60,33 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     render_tab_bar(frame, chunks[0], app);
     render_url_bar(frame, chunks[1], app);
-    render_main_content(frame, chunks[2], app);
+
+    // Always clear the main content area to prevent artifacts
+    frame.render_widget(Clear, chunks[2]);
+
+    // Chat mode: split into content and chat (hides links)
+    if app.panel_mode == PanelMode::Chat {
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(65),
+                Constraint::Percentage(35),
+            ])
+            .split(chunks[2]);
+        render_content_only(frame, split[0], app);
+        render_chat_side_panel(frame, split[1], app);
+    } else {
+        render_main_content(frame, chunks[2], app);
+    }
+
     render_status_bar(frame, chunks[3], app);
 
-    // Render overlay panels
+    // Render overlay panels (not chat anymore)
     match app.panel_mode {
         PanelMode::Bookmarks => render_bookmarks_panel(frame, inner, app),
         PanelMode::History => render_history_panel(frame, inner, app),
         PanelMode::Help => render_help_panel(frame, inner, app),
-        PanelMode::Chat => render_chat_panel(frame, inner, app),
+        PanelMode::Chat => {} // Handled above as side panel
         PanelMode::Settings => render_settings_panel(frame, inner, app),
         PanelMode::Rag => render_rag_panel(frame, inner, app),
         PanelMode::Memory => render_memory_panel(frame, inner, app),
@@ -199,6 +217,11 @@ fn render_main_content(frame: &mut Frame, area: Rect, app: &mut App) {
     } else {
         render_content_area(frame, area, app);
     }
+}
+
+/// Render only content without sidebar (used when chat is open)
+fn render_content_only(frame: &mut Frame, area: Rect, app: &App) {
+    render_content_area(frame, area, app);
 }
 
 fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
@@ -661,78 +684,110 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
     out
 }
 
-fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let panel_area = centered_rect(80, 80, area);
-    frame.render_widget(Clear, panel_area);
+/// Side panel chat - integrates with main content area
+fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
+    // Clear the area first to avoid artifacts
+    frame.render_widget(Clear, area);
+
+    let border_color = if app.chat_focused { AZUL_BLUE } else { TOKYO_BLUE };
+    let title = if app.chat_focused { " CHAT " } else { " chat " };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(AZUL_BLUE))
-        .title(" AI Chat | j/k scroll | Ctrl+↑/↓ model | Enter send | c close ")
+        .border_style(Style::default().fg(border_color))
+        .title(title)
         .style(Style::default().bg(TOKYO_BG));
 
     if app.chat_session.is_none() {
-        let empty = Paragraph::new("AI Chat not available. Configure OPENROUTER_API_KEY in settings.")
+        let empty = Paragraph::new("Configure AI in settings")
             .block(block)
             .style(Style::default().fg(TOKYO_COMMENT))
             .alignment(Alignment::Center);
-        frame.render_widget(empty, panel_area);
+        frame.render_widget(empty, area);
         return;
     }
 
-    let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
+    let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
+    let wrap_width = inner.width.saturating_sub(2).max(20) as usize;
 
-    // Split into messages area and input
+    // Calculate input height based on text length (with wrapping)
+    let input_len = app.chat_input.len() + 3; // +3 for "❯ " and "_"
+    let input_lines = ((input_len / wrap_width.max(1)) + 1).max(1).min(6) as u16; // 1-6 lines
+    let input_height = input_lines + 2; // +2 for border
+
+    // Split: messages | input
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),
-            Constraint::Length(3),
+            Constraint::Length(input_height),
         ])
         .split(inner);
 
-    // Render messages
+    // Render messages with markdown styling
     if let Some(session) = &app.chat_session {
-        let mut lines = Vec::new();
+        let mut all_lines: Vec<Line> = Vec::new();
+        let md_renderer = StyledMarkdown::new(wrap_width);
 
         for msg in &session.messages {
-            let (prefix, style) = match msg.role {
-                crate::chat::Role::User => ("You: ", Style::default().fg(TOKYO_GREEN)),
-                crate::chat::Role::Assistant => ("AI: ", Style::default().fg(AZUL_BLUE)),
-                crate::chat::Role::System => continue, // Skip system messages
-                _ => ("", Style::default().fg(TOKYO_COMMENT)),
-            };
-
-            // Add prefix line
-            lines.push(Line::from(vec![
-                Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
-            ]));
-
-            // Add message content (will wrap automatically)
-            lines.push(Line::from(vec![
-                Span::styled(&msg.content, style),
-            ]));
-
-            // Add spacing
-            lines.push(Line::from(""));
+            match msg.role {
+                crate::chat::Role::System => continue,
+                crate::chat::Role::User => {
+                    // User message - simple styled prefix
+                    all_lines.push(Line::from(vec![
+                        Span::styled("▸ ", Style::default().fg(TOKYO_GREEN)),
+                        Span::styled(&msg.content, Style::default().fg(TOKYO_TEXT)),
+                    ]));
+                    all_lines.push(Line::from(""));
+                }
+                crate::chat::Role::Assistant => {
+                    // AI message - render as markdown
+                    let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
+                    let styled = md_renderer.render(&content_lines);
+                    all_lines.extend(styled);
+                    all_lines.push(Line::from(""));
+                }
+                _ => {}
+            }
         }
 
-        let msg_para = Paragraph::new(lines)
-            .block(Block::default())
+        // Calculate visible area with scrolling
+        let visible_height = chunks[0].height as usize;
+        let total_lines = all_lines.len();
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        let scroll = (app.chat_scroll as usize).min(max_scroll);
+
+        let visible: Vec<Line> = all_lines
+            .into_iter()
+            .skip(scroll)
+            .take(visible_height)
+            .collect();
+
+        let msg_para = Paragraph::new(visible)
             .style(Style::default().fg(TOKYO_TEXT))
-            .wrap(Wrap { trim: true })
-            .scroll((app.chat_scroll as u16, 0));
+            .wrap(Wrap { trim: false });
         frame.render_widget(msg_para, chunks[0]);
     }
 
-    // Render input
-    let input_text = format!("> {}_", app.chat_input);
+    // Input area with cursor
+    let input_block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(TOKYO_COMMENT));
+
+    let input_text = format!("❯ {}_", app.chat_input);
     let input = Paragraph::new(input_text)
-        .block(Block::default().borders(Borders::ALL).title(" Input "))
-        .style(Style::default().fg(TOKYO_TEXT));
+        .block(input_block)
+        .style(Style::default().fg(TOKYO_TEXT))
+        .wrap(Wrap { trim: false });
     frame.render_widget(input, chunks[1]);
 
-    frame.render_widget(block, panel_area);
+    frame.render_widget(block, area);
+}
+
+// Keep old function for compatibility (unused but prevents compile errors)
+#[allow(dead_code)]
+fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
+    render_chat_side_panel(frame, area, app);
 }
 
 fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {

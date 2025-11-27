@@ -100,6 +100,7 @@ pub struct App {
     pub chat_input: String,
     pub chat_selected_model: usize,
     pub chat_scroll: usize,
+    pub chat_focused: bool,
 
     // Settings
     pub settings_selected: usize,
@@ -175,6 +176,7 @@ impl App {
             chat_input: String::new(),
             chat_selected_model: 0,
             chat_scroll: 0,
+            chat_focused: true,
             settings_selected: 0,
             settings_model_input: String::new(),
             settings_editing_model: false,
@@ -927,90 +929,134 @@ impl App {
 
     fn handle_chat_keys(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+            // Esc closes chat
+            KeyCode::Esc => {
                 self.panel_mode = PanelMode::None;
+                self.chat_focused = true; // Reset for next open
             }
-            // Scrolling
-            KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.chat_scroll > 0 {
-                    self.chat_scroll -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.chat_scroll += 1;
-            }
-            KeyCode::PageUp => {
-                self.chat_scroll = self.chat_scroll.saturating_sub(10);
-            }
-            KeyCode::PageDown => {
-                self.chat_scroll += 10;
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                self.chat_scroll = 0;
-            }
-            // Model switching
-            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Cycle to previous model
-                if let Some(session) = &mut self.chat_session {
-                    if !session.available_models.is_empty() {
-                        self.chat_selected_model = if self.chat_selected_model == 0 {
-                            session.available_models.len() - 1
-                        } else {
-                            self.chat_selected_model - 1
-                        };
-                        session.set_model(session.available_models[self.chat_selected_model].clone());
-                        self.status_message = format!("Model: {}", session.model);
-                    }
-                }
-            }
-            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Cycle to next model
-                if let Some(session) = &mut self.chat_session {
-                    if !session.available_models.is_empty() {
-                        self.chat_selected_model = (self.chat_selected_model + 1) % session.available_models.len();
-                        session.set_model(session.available_models[self.chat_selected_model].clone());
-                        self.status_message = format!("Model: {}", session.model);
-                    }
-                }
-            }
-            KeyCode::Char(c) if c != 'c' => {
-                self.chat_input.push(c);
-            }
-            KeyCode::Backspace => {
-                self.chat_input.pop();
-            }
-            KeyCode::Enter => {
-                if !self.chat_input.is_empty() {
-                    let message = self.chat_input.clone();
-                    self.chat_input.clear();
-
-                    // Get browser context before mutable borrow
-                    let context = self.get_browser_context();
-
-                    if let Some(session) = &mut self.chat_session {
-                        // Add browser context before the user message
-                        session.add_user_message(format!("{}\n\n{}", context, message));
-
-                        // Send to AI in background with fallback support
-                        let api_key = self.config.get_api_key().unwrap_or("").to_string();
-                        let models = session.available_models.clone();
-                        let messages = session.messages.clone();
-                        let tx = self.page_tx.clone();
-
-                        self.mascot.set_state(crate::mascot::MascotState::Loading);
-                        self.status_message = "Thinking...".to_string();
-
-                        std::thread::spawn(move || {
-                            match send_chat_message_with_fallback(&api_key, &models, &messages) {
-                                Ok(response) => {
-                                    let _ = tx.send(AppMessage::ChatResponse(response));
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
+            // Tab behavior depends on focus
+            KeyCode::Tab => {
+                if self.chat_focused {
+                    // Tab switches from chat to content focus
+                    self.chat_focused = false;
+                    self.status_message = "Content focused (Tab cycles links)".to_string();
+                } else {
+                    // Tab cycles through links in content
+                    if let Some(page) = self.current_page() {
+                        let link_count = page.links.len();
+                        if link_count > 0 {
+                            let selected = self.sidebar_selected();
+                            let next = (selected + 1) % link_count;
+                            self.set_sidebar_selected(next);
+                            if let Some(page) = self.current_page() {
+                                if let Some(link) = page.links.get(next) {
+                                    let name = if link.text.is_empty() { &link.url } else { &link.text };
+                                    self.status_message = format!("Link {}/{}: {}", next + 1, link_count, name);
                                 }
                             }
-                        });
+                        }
                     }
+                }
+            }
+            // Shift+Tab goes back to chat focus
+            KeyCode::BackTab => {
+                self.chat_focused = true;
+                self.status_message = "Chat focused".to_string();
+            }
+            // Chat scrolling with PageUp/PageDown (always available)
+            KeyCode::PageUp => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(5);
+            }
+            KeyCode::PageDown => {
+                self.chat_scroll += 5;
+            }
+            // Arrow keys scroll chat when chat is focused
+            KeyCode::Up if self.chat_focused => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(1);
+            }
+            KeyCode::Down if self.chat_focused => {
+                self.chat_scroll += 1;
+            }
+            _ if self.chat_focused => {
+                // Only handle input when chat is focused
+                match key.code {
+                    KeyCode::Char(c) => {
+                        self.chat_input.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        self.chat_input.pop();
+                    }
+                    KeyCode::Enter => {
+                        if !self.chat_input.is_empty() {
+                            let message = self.chat_input.clone();
+                            self.chat_input.clear();
+
+                            let context = self.get_browser_context();
+
+                            if let Some(session) = &mut self.chat_session {
+                                session.add_user_message(format!("{}\n\n{}", context, message));
+
+                                let api_key = self.config.get_api_key().unwrap_or("").to_string();
+                                let base_url = self.config.get_ai_base_url()
+                                    .unwrap_or("https://openrouter.ai/api/v1")
+                                    .to_string();
+                                let models = session.available_models.clone();
+                                let messages = session.messages.clone();
+                                let tx = self.page_tx.clone();
+
+                                self.mascot.set_state(crate::mascot::MascotState::Loading);
+                                self.status_message = "Thinking...".to_string();
+
+                                std::thread::spawn(move || {
+                                    match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages) {
+                                        Ok(response) => {
+                                            let _ = tx.send(AppMessage::ChatResponse(response));
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ if !self.chat_focused => {
+                // Content navigation when not focused on chat
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            tab.scroll_offset = tab.scroll_offset.saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            tab.scroll_offset += 1;
+                        }
+                    }
+                    KeyCode::Char('g') => {
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            tab.scroll_offset = 0;
+                        }
+                    }
+                    KeyCode::Char('G') => {
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            tab.scroll_offset = usize::MAX / 2; // Will be clamped during render
+                        }
+                    }
+                    KeyCode::Enter => {
+                        // Follow the selected link
+                        if let Some(page) = self.current_page() {
+                            let selected = self.sidebar_selected();
+                            if let Some(link) = page.links.get(selected) {
+                                self.url_input = link.url.clone();
+                                self.navigate();
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -1169,7 +1215,7 @@ struct OpenAIError {
     code: Option<String>,
 }
 
-fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Result<String> {
+fn send_chat_message(api_key: &str, model: &str, base_url: &str, messages: &[ChatMessage]) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()?;
@@ -1195,8 +1241,9 @@ fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Re
         temperature: 0.7,
     };
 
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let response = client
-        .post("https://openrouter.ai/api/v1/chat/completions")
+        .post(&url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("HTTP-Referer", "https://github.com/ser/azul-browse")
@@ -1230,11 +1277,11 @@ fn send_chat_message(api_key: &str, model: &str, messages: &[ChatMessage]) -> Re
     }
 }
 
-fn send_chat_message_with_fallback(api_key: &str, models: &[String], messages: &[ChatMessage]) -> Result<String> {
+fn send_chat_message_with_fallback(api_key: &str, base_url: &str, models: &[String], messages: &[ChatMessage]) -> Result<String> {
     let mut errors = Vec::new();
 
     for (i, model) in models.iter().enumerate() {
-        match send_chat_message(api_key, model, messages) {
+        match send_chat_message(api_key, model, base_url, messages) {
             Ok(response) => {
                 if i > 0 {
                     // Used a fallback model

@@ -577,10 +577,19 @@ fn parse_scholar_html(html: &str) -> Vec<SearchResult> {
     let document = Html::parse_document(html);
     let mut results = vec![];
 
-    // Google Scholar result structure
-    let result_selector = Selector::parse(".gs_r.gs_or.gs_scl").unwrap();
-    let title_selector = Selector::parse(".gs_rt a").unwrap();
-    let snippet_selector = Selector::parse(".gs_rs").unwrap();
+    // Google Scholar result structure - use ok() to avoid panics
+    let result_selector = match Selector::parse(".gs_r.gs_or.gs_scl") {
+        Ok(s) => s,
+        Err(_) => return results,
+    };
+    let title_selector = match Selector::parse(".gs_rt a") {
+        Ok(s) => s,
+        Err(_) => return results,
+    };
+    let snippet_selector = match Selector::parse(".gs_rs") {
+        Ok(s) => s,
+        Err(_) => return results,
+    };
 
     for element in document.select(&result_selector) {
         let title = element
@@ -908,9 +917,9 @@ impl SearchManager {
         }
     }
 
-    /// Convenience method: search all engines with 2 results each (default aggregated search)
+    /// Convenience method: search all engines with 5 results each (default aggregated search)
     pub fn search_aggregated(&self, query: &str) -> AggregatedSearchResponse {
-        self.search_all_with_limit(query, 2)
+        self.search_all_with_limit(query, 5)
     }
 }
 
@@ -963,9 +972,10 @@ impl AggregatedSearchResponse {
                     lines.push(format!("{}. **{}**", idx + 1, result.title));
 
                     if !result.description.is_empty() {
-                        // Truncate long descriptions
-                        let desc = if result.description.len() > 200 {
-                            format!("{}...", &result.description[..200])
+                        // Truncate long descriptions (safely handle UTF-8)
+                        let desc = if result.description.chars().count() > 200 {
+                            let truncated: String = result.description.chars().take(200).collect();
+                            format!("{}...", truncated)
                         } else {
                             result.description.clone()
                         };
