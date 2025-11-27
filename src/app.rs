@@ -948,8 +948,12 @@ impl App {
                     let message = self.chat_input.clone();
                     self.chat_input.clear();
 
+                    // Get browser context before mutable borrow
+                    let context = self.get_browser_context();
+
                     if let Some(session) = &mut self.chat_session {
-                        session.add_user_message(message.clone());
+                        // Add browser context before the user message
+                        session.add_user_message(format!("{}\n\n{}", context, message));
 
                         // Send to AI in background with fallback support
                         let api_key = self.config.get_api_key().unwrap_or("").to_string();
@@ -1038,6 +1042,28 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn get_browser_context(&self) -> String {
+        let mut context = String::from("[Browser Context]");
+
+        if let Some(page) = self.current_page() {
+            context.push_str(&format!(
+                "\nCurrent page: {} ({})\nLinks: {}\nContent preview:\n{}",
+                page.title,
+                page.url,
+                page.links.len(),
+                page.content_lines.iter()
+                    .take(10)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        } else {
+            context.push_str("\nNo page currently loaded.");
+        }
+
+        context
     }
 
     fn refresh_memory(&mut self) {
