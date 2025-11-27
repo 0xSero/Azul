@@ -239,6 +239,15 @@ fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
             let page = search::results_to_page(response);
             print_page(&page);
         }
+        QueryTarget::MultiSearch { query } => {
+            println!("Multi-engine search for: {}", query);
+            println!();
+
+            let manager = SearchManager::new().context("Search manager init failed")?;
+            let response = manager.search_aggregated(&query);
+            let page = response.to_page();
+            print_page(&page);
+        }
     }
 
     Ok(())

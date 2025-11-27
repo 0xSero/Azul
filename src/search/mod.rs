@@ -863,6 +863,138 @@ impl SearchManager {
     pub fn available_engines(&self) -> Vec<EngineType> {
         self.engines.keys().cloned().collect()
     }
+
+    /// Search all engines and return limited results per engine
+    /// This is the multi-engine aggregated search
+    pub fn search_all_with_limit(&self, query: &str, limit_per_engine: usize) -> AggregatedSearchResponse {
+        let mut all_results = Vec::new();
+        let mut engine_results: std::collections::HashMap<EngineType, Vec<SearchResult>> =
+            std::collections::HashMap::new();
+
+        // Define the order of engines for display
+        let engine_order = [
+            EngineType::Wikipedia,
+            EngineType::ArXiv,
+            EngineType::Scholar,
+            EngineType::DuckDuckGo,
+            EngineType::PubMed,
+            EngineType::OpenLibrary,
+        ];
+
+        for engine_type in &engine_order {
+            if let Some(engine) = self.engines.get(engine_type) {
+                if let Ok(response) = engine.search(query) {
+                    let limited: Vec<SearchResult> = response
+                        .results
+                        .into_iter()
+                        .take(limit_per_engine)
+                        .collect();
+                    engine_results.insert(*engine_type, limited);
+                }
+            }
+        }
+
+        // Collect results in engine order
+        for engine_type in &engine_order {
+            if let Some(results) = engine_results.get(engine_type) {
+                all_results.extend(results.iter().cloned());
+            }
+        }
+
+        AggregatedSearchResponse {
+            query: query.to_string(),
+            results: all_results,
+            results_by_engine: engine_results,
+        }
+    }
+
+    /// Convenience method: search all engines with 2 results each (default aggregated search)
+    pub fn search_aggregated(&self, query: &str) -> AggregatedSearchResponse {
+        self.search_all_with_limit(query, 2)
+    }
+}
+
+/// Aggregated search response from multiple engines
+#[derive(Debug, Clone)]
+pub struct AggregatedSearchResponse {
+    pub query: String,
+    pub results: Vec<SearchResult>,
+    pub results_by_engine: std::collections::HashMap<EngineType, Vec<SearchResult>>,
+}
+
+impl AggregatedSearchResponse {
+    /// Convert to a display Page with engine grouping
+    pub fn to_page(&self) -> crate::browser::Page {
+        use crate::browser::{Link, Page};
+
+        let mut lines = vec![
+            format!("# Multi-Engine Search: \"{}\"", self.query),
+            String::new(),
+            format!("Found {} results across {} engines",
+                    self.results.len(),
+                    self.results_by_engine.len()),
+            String::new(),
+            "---".to_string(),
+            String::new(),
+        ];
+
+        let mut links = Vec::new();
+
+        // Display results grouped by engine
+        let engine_order = [
+            EngineType::Wikipedia,
+            EngineType::ArXiv,
+            EngineType::Scholar,
+            EngineType::DuckDuckGo,
+            EngineType::PubMed,
+            EngineType::OpenLibrary,
+        ];
+
+        for engine_type in &engine_order {
+            if let Some(results) = self.results_by_engine.get(engine_type) {
+                if results.is_empty() {
+                    continue;
+                }
+
+                lines.push(format!("## {} ({})", engine_type.name(), results.len()));
+                lines.push(String::new());
+
+                for (idx, result) in results.iter().enumerate() {
+                    lines.push(format!("{}. **{}**", idx + 1, result.title));
+
+                    if !result.description.is_empty() {
+                        // Truncate long descriptions
+                        let desc = if result.description.len() > 200 {
+                            format!("{}...", &result.description[..200])
+                        } else {
+                            result.description.clone()
+                        };
+                        lines.push(format!("   > {}", desc));
+                    }
+
+                    lines.push(format!("   🔗 {}", result.url));
+                    lines.push(String::new());
+
+                    links.push(Link {
+                        text: format!("[{}] {}", engine_type.name(), result.title),
+                        url: result.url.clone(),
+                    });
+                }
+            }
+        }
+
+        if self.results.is_empty() {
+            lines.push("No results found across any search engine.".to_string());
+        }
+
+        Page {
+            url: format!("search:multi:{}", self.query),
+            title: format!("Search: {}", self.query),
+            content_lines: lines,
+            raw_content: String::new(),
+            links,
+        }
+    }
 }
 
 impl Default for SearchManager {
@@ -898,6 +1030,7 @@ pub fn parse_query(input: &str) -> (Option<EngineType>, String) {
 pub enum QueryTarget {
     Url(String),
     Search { engine: EngineType, query: String },
+    MultiSearch { query: String },  // New: multi-engine search
 }
 
 /// Determine whether the input should be treated as a URL or a search query
@@ -924,9 +1057,8 @@ pub fn classify_query(input: &str) -> QueryTarget {
         return QueryTarget::Url(format!("https://{}", trimmed));
     }
 
-    // Default to DuckDuckGo search
-    QueryTarget::Search {
-        engine: EngineType::DuckDuckGo,
+    // Default to multi-engine search (aggregated across all engines)
+    QueryTarget::MultiSearch {
         query: trimmed.to_string(),
     }
 }

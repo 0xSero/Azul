@@ -1,4 +1,6 @@
 mod neon;
+pub mod markdown;
+pub mod theme;
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -12,17 +14,19 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Focus, PanelMode, ViewMode};
 use crate::mascot;
 use neon::NeonBorder;
+use markdown::StyledMarkdown;
 
-// Tokyo Night color palette
-const AZUL_BLUE: Color = Color::Rgb(0, 191, 255);
-const TOKYO_BLUE: Color = Color::Rgb(122, 162, 247);
-const TOKYO_PURPLE: Color = Color::Rgb(187, 154, 247);
-const TOKYO_ORANGE: Color = Color::Rgb(255, 169, 0);
-const TOKYO_GREEN: Color = Color::Rgb(158, 206, 106);
-const TOKYO_RED: Color = Color::Rgb(247, 118, 142);
-const TOKYO_TEXT: Color = Color::Rgb(192, 202, 245);
-const TOKYO_COMMENT: Color = Color::Rgb(125, 137, 168);
-const TOKYO_BG: Color = Color::Rgb(26, 27, 38);
+// Tokyo Night color palette (made pub for markdown module)
+pub const AZUL_BLUE: Color = Color::Rgb(0, 191, 255);
+pub const TOKYO_BLUE: Color = Color::Rgb(122, 162, 247);
+pub const TOKYO_PURPLE: Color = Color::Rgb(187, 154, 247);
+pub const TOKYO_ORANGE: Color = Color::Rgb(255, 169, 0);
+pub const TOKYO_GREEN: Color = Color::Rgb(158, 206, 106);
+pub const TOKYO_RED: Color = Color::Rgb(247, 118, 142);
+pub const TOKYO_TEXT: Color = Color::Rgb(192, 202, 245);
+pub const TOKYO_COMMENT: Color = Color::Rgb(125, 137, 168);
+pub const TOKYO_BG: Color = Color::Rgb(26, 27, 38);
+pub const TOKYO_CYAN: Color = Color::Rgb(125, 207, 255);
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
@@ -115,28 +119,19 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     // Check if current page is bookmarked
     let bookmark_indicator = if app.is_current_bookmarked() {
-        Span::styled(" [*]", Style::default().fg(TOKYO_ORANGE))
+        Span::styled(" ★", Style::default().fg(TOKYO_ORANGE))
     } else {
         Span::raw("")
     };
 
+    // Companion in title - always visible
+    let companion = app.mascot.view();
+
     let title = vec![
-        Span::styled("Azul", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
-        Span::raw("-"),
-        Span::styled("Browse", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+        Span::styled(companion, Style::default().fg(AZUL_BLUE)),
         Span::raw(" "),
-        Span::styled("v3.0", Style::default().fg(TOKYO_BLUE)),
-        Span::raw(" | "),
-        Span::styled(
-            "Terminal Web Browser",
-            Style::default().fg(TOKYO_TEXT).add_modifier(Modifier::ITALIC),
-        ),
+        Span::styled("azul", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
         bookmark_indicator,
-        Span::raw(" | "),
-        Span::styled(
-            app.mascot.view_mini(),
-            Style::default().fg(AZUL_BLUE),
-        ),
     ];
 
     let title_paragraph = Paragraph::new(Line::from(title))
@@ -154,12 +149,20 @@ fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.focus == Focus::URLBar;
     let border_color = if is_focused { AZUL_BLUE } else { TOKYO_BLUE };
 
+    // Companion appears in URL bar when active
+    let companion_prefix = match app.mascot.state() {
+        mascot::CompanionState::Loading | mascot::CompanionState::Searching => {
+            format!("{} ", app.mascot.view())
+        }
+        _ => String::new(),
+    };
+
     let display_text = if is_focused {
-        format!("{}_", app.url_input)
+        format!("{}{}_", companion_prefix, app.url_input)
     } else if let Some(page) = app.current_page() {
-        page.url.clone()
+        format!("{}{}", companion_prefix, page.url)
     } else {
-        "Press / to enter URL or search...".to_string()
+        format!("{}/ to search...", companion_prefix)
     };
 
     let url_paragraph = Paragraph::new(display_text)
@@ -232,10 +235,15 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
         // Prepend AI summary if available
         if let Some(summary) = &app.ai_summary {
-            let mut summary_lines = vec!["AI Summary".to_string()];
+            let mut summary_lines = vec![
+                "# AI Summary".to_string(),
+                String::new(),
+            ];
             for wrapped in textwrap::wrap(summary, wrap_width) {
                 summary_lines.push(wrapped.into_owned());
             }
+            summary_lines.push(String::new());
+            summary_lines.push("---".to_string());
             summary_lines.push(String::new());
 
             let mut combined = summary_lines;
@@ -248,10 +256,18 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         let start = scroll.min(total_lines.saturating_sub(1));
         let end = (start + visible_height).min(total_lines);
 
-        let visible_lines: Vec<Line> = lines[start..end]
-            .iter()
-            .map(|line| Line::from(line.clone()))
-            .collect();
+        // Use styled markdown rendering for rendered view
+        let visible_lines: Vec<Line> = if app.view_mode == ViewMode::Rendered {
+            let md_renderer = StyledMarkdown::new(wrap_width);
+            let styled = md_renderer.render(&lines[start..end].to_vec());
+            styled
+        } else {
+            // Raw view - plain text
+            lines[start..end]
+                .iter()
+                .map(|line| Line::from(line.clone()))
+                .collect()
+        };
 
         let content = Paragraph::new(visible_lines)
             .block(block)
@@ -362,16 +378,20 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     // Tab info
     let tab_info = format!("[{}/{}]", app.tabs.active_index() + 1, app.tabs.count());
 
+    // Companion follows you in the status bar
+    let companion = app.mascot.view_status();
+
     let primary_line = Line::from(vec![
+        Span::styled(companion, Style::default().fg(AZUL_BLUE)),
+        Span::raw(" "),
         Span::styled(tab_info, Style::default().fg(TOKYO_PURPLE)),
         Span::raw(" "),
-        Span::styled("Focus: ", Style::default().fg(TOKYO_TEXT)),
         Span::styled(focus_name, Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
-        Span::raw(" | "),
+        Span::raw(" "),
         Span::styled(&app.status_message, Style::default().fg(TOKYO_TEXT)),
     ]);
 
-    let shortcuts = "t:tab b:bookmarks H:history B:bookmark ?:help q:quit";
+    let shortcuts = "/ search  t tab  b bookmarks  H history  c chat  ? help  q quit";
     let secondary_line = Line::from(vec![
         Span::styled(shortcuts, Style::default().fg(TOKYO_COMMENT)),
     ]);
@@ -506,49 +526,47 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let panel_area = centered_rect(70, 80, area);
+    let panel_area = centered_rect(65, 75, area);
 
     frame.render_widget(Clear, panel_area);
 
-    let mascot_view = app.mascot.view_compact();
+    // Companion in help header
+    let companion = app.mascot.view();
 
     let help_text = vec![
         Line::from(vec![
-            Span::styled("Azul-Browse", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
-            Span::raw(" - Terminal Web Browser"),
+            Span::styled(companion, Style::default().fg(AZUL_BLUE)),
+            Span::raw(" "),
+            Span::styled("azul", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+            Span::styled(" help", Style::default().fg(TOKYO_TEXT)),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled("Navigation:", Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD))]),
-        Line::from("  / or Ctrl+L   Focus URL bar"),
-        Line::from("  j/k           Scroll content or navigate"),
-        Line::from("  g/G           Go to top/bottom"),
-        Line::from("  p/n           Go back/forward in history"),
-        Line::from("  Tab           Cycle focus"),
-        Line::from("  Enter         Open selected link"),
+        Line::from(vec![Span::styled("navigate", Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD))]),
+        Line::from("  /        search or URL"),
+        Line::from("  j k      scroll"),
+        Line::from("  g G      top / bottom"),
+        Line::from("  Tab      cycle focus"),
+        Line::from("  Enter    open link"),
         Line::from(""),
-        Line::from(vec![Span::styled("Tabs:", Style::default().fg(TOKYO_PURPLE).add_modifier(Modifier::BOLD))]),
-        Line::from("  t             New tab"),
-        Line::from("  Ctrl+W        Close tab"),
-        Line::from("  Alt+1-9       Go to tab"),
-        Line::from("  Ctrl+[/]      Previous/next tab"),
+        Line::from(vec![Span::styled("tabs", Style::default().fg(TOKYO_PURPLE).add_modifier(Modifier::BOLD))]),
+        Line::from("  t        new tab"),
+        Line::from("  Ctrl+W   close"),
+        Line::from("  1-9      switch"),
         Line::from(""),
-        Line::from(vec![Span::styled("Bookmarks & History:", Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD))]),
-        Line::from("  b             Show bookmarks"),
-        Line::from("  B             Toggle bookmark"),
-        Line::from("  H             Show history"),
+        Line::from(vec![Span::styled("tools", Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD))]),
+        Line::from("  b        bookmarks"),
+        Line::from("  B        bookmark page"),
+        Line::from("  H        history"),
+        Line::from("  c        chat"),
+        Line::from("  s        summarize"),
         Line::from(""),
-        Line::from(vec![Span::styled("Other:", Style::default().fg(TOKYO_BLUE).add_modifier(Modifier::BOLD))]),
-        Line::from("  v             Toggle raw view"),
-        Line::from("  J             Toggle JS rendering"),
-        Line::from("  r             Reload page"),
-        Line::from("  s             AI summarize"),
-        Line::from("  Ctrl+S        Save scrape"),
-        Line::from("  ?             Toggle help"),
-        Line::from("  q             Quit"),
+        Line::from(vec![Span::styled("other", Style::default().fg(TOKYO_BLUE).add_modifier(Modifier::BOLD))]),
+        Line::from("  v        raw view"),
+        Line::from("  r        reload"),
+        Line::from("  ?        this help"),
+        Line::from("  q        quit"),
         Line::from(""),
-        Line::from(mascot_view),
-        Line::from(""),
-        Line::from(vec![Span::styled("Press any key to close", Style::default().fg(TOKYO_COMMENT))]),
+        Line::from(vec![Span::styled("esc to close", Style::default().fg(TOKYO_COMMENT))]),
     ];
 
     let help = Paragraph::new(help_text)
@@ -556,7 +574,7 @@ fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(AZUL_BLUE))
-                .title(" HELP ")
+                .title(format!(" {} help ", companion))
                 .style(Style::default().bg(TOKYO_BG)),
         )
         .style(Style::default().fg(TOKYO_TEXT));

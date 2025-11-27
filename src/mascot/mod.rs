@@ -1,108 +1,94 @@
-//! Azul mascot - the cute blue octopus with animations
+//! Azul Companion - Ultra-compact animated mascot
+//!
+//! A tiny, dense companion that follows you around the UI.
+//! Inspired by Claude's thinking indicator - minimal but expressive.
 
-/// Mascot state/mood
+/// Companion state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MascotState {
+pub enum CompanionState {
     Idle,
     Loading,
     Searching,
     Success,
     Error,
-    Sleeping,
-    Waving,
+    Thinking,
 }
 
-/// The Azul mascot
+/// The Azul companion - follows you everywhere
 pub struct Mascot {
-    state: MascotState,
+    state: CompanionState,
     frame: usize,
 }
 
 impl Mascot {
-    /// Create a new mascot
     pub fn new() -> Self {
         Self {
-            state: MascotState::Idle,
+            state: CompanionState::Idle,
             frame: 0,
         }
     }
 
-    /// Set the mascot state
-    pub fn set_state(&mut self, state: MascotState) {
+    pub fn set_state(&mut self, state: CompanionState) {
         if self.state != state {
             self.state = state;
             self.frame = 0;
         }
     }
 
-    /// Get current state
-    pub fn state(&self) -> MascotState {
+    pub fn state(&self) -> CompanionState {
         self.state
     }
 
-    /// Advance animation frame
     pub fn tick(&mut self) {
         self.frame = self.frame.wrapping_add(1);
     }
 
-    /// Get the current animation frame
-    pub fn frame(&self) -> usize {
-        self.frame
-    }
-
-    /// Render the full mascot
+    /// The main companion - ultra compact, 1-2 chars
     pub fn view(&self) -> &'static str {
-        let frames = self.get_frames();
-        let idx = self.frame % frames.len();
-        frames[idx]
+        let frames = match self.state {
+            CompanionState::Idle => &COMPANION_IDLE[..],
+            CompanionState::Loading => &COMPANION_LOADING[..],
+            CompanionState::Searching => &COMPANION_SEARCHING[..],
+            CompanionState::Success => &COMPANION_SUCCESS[..],
+            CompanionState::Error => &COMPANION_ERROR[..],
+            CompanionState::Thinking => &COMPANION_THINKING[..],
+        };
+        frames[self.frame % frames.len()]
     }
 
-    /// Render compact version for status bar
-    pub fn view_compact(&self) -> &'static str {
-        let frames = self.get_compact_frames();
-        let idx = self.frame % frames.len();
-        frames[idx]
+    /// Companion with context label
+    pub fn view_with_label(&self) -> &'static str {
+        let frames = match self.state {
+            CompanionState::Idle => &LABELED_IDLE[..],
+            CompanionState::Loading => &LABELED_LOADING[..],
+            CompanionState::Searching => &LABELED_SEARCHING[..],
+            CompanionState::Success => &LABELED_SUCCESS[..],
+            CompanionState::Error => &LABELED_ERROR[..],
+            CompanionState::Thinking => &LABELED_THINKING[..],
+        };
+        frames[self.frame % frames.len()]
     }
 
-    /// Render mini inline version
+    /// Status bar companion - shows activity
+    pub fn view_status(&self) -> &'static str {
+        let frames = match self.state {
+            CompanionState::Idle => &STATUS_IDLE[..],
+            CompanionState::Loading => &STATUS_LOADING[..],
+            CompanionState::Searching => &STATUS_SEARCHING[..],
+            CompanionState::Success => &STATUS_SUCCESS[..],
+            CompanionState::Error => &STATUS_ERROR[..],
+            CompanionState::Thinking => &STATUS_THINKING[..],
+        };
+        frames[self.frame % frames.len()]
+    }
+
+    /// For backwards compatibility
     pub fn view_mini(&self) -> &'static str {
-        let frames = self.get_mini_frames();
-        let idx = self.frame % frames.len();
-        frames[idx]
+        self.view()
     }
 
-    fn get_frames(&self) -> &'static [&'static str] {
-        match self.state {
-            MascotState::Idle => &IDLE_FRAMES,
-            MascotState::Loading => &LOADING_FRAMES,
-            MascotState::Searching => &SEARCHING_FRAMES,
-            MascotState::Success => &SUCCESS_FRAMES,
-            MascotState::Error => &ERROR_FRAMES,
-            MascotState::Sleeping => &SLEEPING_FRAMES,
-            MascotState::Waving => &WAVING_FRAMES,
-        }
-    }
-
-    fn get_compact_frames(&self) -> &'static [&'static str] {
-        match self.state {
-            MascotState::Idle => &COMPACT_IDLE,
-            MascotState::Loading => &COMPACT_LOADING,
-            MascotState::Searching => &COMPACT_SEARCHING,
-            MascotState::Success => &COMPACT_SUCCESS,
-            MascotState::Error => &COMPACT_ERROR,
-            _ => &COMPACT_IDLE,
-        }
-    }
-
-    fn get_mini_frames(&self) -> &'static [&'static str] {
-        match self.state {
-            MascotState::Idle => &["(o^o)", "(o`o)", "(o^o)", "(`^`)"],
-            MascotState::Loading => &["(o.o)", "(o..)", "(..o)", "(o.o)"],
-            MascotState::Searching => &["(o_o)", "(o_`)", "(`_o)", "(`_`)"],
-            MascotState::Success => &["(^o^)", "(^v^)", "(^o^)", "\\(^o^)/"],
-            MascotState::Error => &["(;_;)", "(T_T)", "(;_;)", "(>_<)"],
-            _ => &["(o^o)"],
-        }
+    pub fn view_compact(&self) -> &'static str {
+        self.view_with_label()
     }
 }
 
@@ -112,369 +98,129 @@ impl Default for Mascot {
     }
 }
 
+// Re-export the old state names for compatibility
+pub use CompanionState as MascotState;
+
 // ═══════════════════════════════════════════════════════════════════════════
-// FULL SIZE MASCOT FRAMES
+// COMPANION CORE - Ultra minimal (1-2 chars)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static IDLE_FRAMES: [&str; 4] = [
-    r#"
-    .-------.
-    | O   O |
-    |   w   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-    ~ AZUL ~
-"#,
-    r#"
-    .-------.
-    | O   O |
-    |   w   |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-    ~ AZUL ~
-"#,
-    r#"
-    .-------.
-    | O   O |
-    |   u   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-    ~ AZUL ~
-"#,
-    r#"
-    .-------.
-    | O   O |
-    |   w   |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-    ~ AZUL ~
-"#,
+// Idle: gentle pulse
+static COMPANION_IDLE: [&str; 6] = ["◉", "◎", "○", "◎", "◉", "●"];
+
+// Loading: smooth Braille spinner
+static COMPANION_LOADING: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+// Searching: scanning dots
+static COMPANION_SEARCHING: [&str; 6] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟"];
+
+// Success: sparkle
+static COMPANION_SUCCESS: [&str; 4] = ["✦", "★", "✧", "☆"];
+
+// Error: pulse warning
+static COMPANION_ERROR: [&str; 4] = ["◈", "◇", "◈", "!"];
+
+// Thinking: contemplation
+static COMPANION_THINKING: [&str; 8] = ["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LABELED COMPANION - With state context
+// ═══════════════════════════════════════════════════════════════════════════
+
+static LABELED_IDLE: [&str; 6] = [
+    "◉ ready",
+    "◎ ready",
+    "○ ready",
+    "◎ ready",
+    "◉ ready",
+    "● ready",
 ];
 
-static LOADING_FRAMES: [&str; 4] = [
-    r#"
-    .-------.
-    | O   O |  |
-    |   o   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | O   O |  /
-    |   o   |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-"#,
-    r#"
-    .-------.
-    | O   O |  -
-    |   o   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | O   O |  \
-    |   o   |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-"#,
+static LABELED_LOADING: [&str; 10] = [
+    "⠋ loading",
+    "⠙ loading",
+    "⠹ loading",
+    "⠸ loading",
+    "⠼ loading",
+    "⠴ loading",
+    "⠦ loading",
+    "⠧ loading",
+    "⠇ loading",
+    "⠏ loading",
 ];
 
-static SEARCHING_FRAMES: [&str; 4] = [
-    r#"
-    .-------.
-    | O > O | (?)
-    |   ?   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | O   > |  (?)
-    |   ?   |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-"#,
-    r#"
-    .-------.
-    | < O O |(?)
-    |   ?   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | <   O | (?)
-    |   ?   |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-"#,
+static LABELED_SEARCHING: [&str; 6] = [
+    "⣾ searching",
+    "⣽ searching",
+    "⣻ searching",
+    "⢿ searching",
+    "⡿ searching",
+    "⣟ searching",
 ];
 
-static SUCCESS_FRAMES: [&str; 4] = [
-    r#"
-    .-------.
-    | ^   ^ | *
-    |   V   |
-    '---+---'
-   \\/\|||/\/
-    \ ||| /
-     YAY!
-"#,
-    r#"
-   *.-------.*
-    | ^   ^ |
-    |   V   |
-    '---+---'
-   /\/\|||\/\
-    / ||| \
-     YAY!
-"#,
-    r#"
-    .-------.
-    | ^   ^ | *
-    |   u   |
-    '---+---'
-   \\/\|||/\/
-    \ ||| /
-     YAY!
-"#,
-    r#"
-  * .-------. *
-    | ^   ^ |
-    |   V   |
-    '---+---'
-   /\/\|||\/\
-    / ||| \
-     YAY!
-"#,
-];
+static LABELED_SUCCESS: [&str; 4] = ["✦ done", "★ done", "✧ done", "☆ done"];
 
-static ERROR_FRAMES: [&str; 3] = [
-    r#"
-    .-------.
-    | ;   ; | X
-    |   n   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-     oops
-"#,
-    r#"
-    .-------.
-    | T   T | X
-    |  ~~~  |
-    '---+---'
-   ///|||||\\\
-   / /|||||\ \
-     oops
-"#,
-    r#"
-    .-------.
-    | ;   ; | X
-    |  ~~~  |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-     oops
-"#,
-];
+static LABELED_ERROR: [&str; 4] = ["◈ error", "◇ error", "◈ oops", "! error"];
 
-static SLEEPING_FRAMES: [&str; 4] = [
-    r#"
-    .-------.
-    | -   - |  z
-    |   w   | z
-    '---+---'  Z
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | -   - |   z
-    |   w   |  z
-    '---+---' Z
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | -   - |    z
-    |   w   |   z
-    '---+---'  Z
-   ///|||||\\\
-  / / ||||| \ \
-"#,
-    r#"
-    .-------.
-    | -   - |
-    |   w   |  z
-    '---+---' z
-   ///|||||\\\ Z
-  / / ||||| \ \
-"#,
-];
-
-static WAVING_FRAMES: [&str; 4] = [
-    r#"
-    .-------.
-    | O   O | /
-    |   V   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-      hi!
-"#,
-    r#"
-    .-------.
-    | O   O |  |
-    |   V   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-      hi!
-"#,
-    r#"
-    .-------.
-    | O   O | \
-    |   V   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-      hi!
-"#,
-    r#"
-    .-------.
-    | O   O |  |
-    |   V   |
-    '---+---'
-   ///|||||\\\
-  / / ||||| \ \
-      hi!
-"#,
+static LABELED_THINKING: [&str; 8] = [
+    "⠁ thinking",
+    "⠂ thinking",
+    "⠄ thinking",
+    "⡀ thinking",
+    "⢀ thinking",
+    "⠠ thinking",
+    "⠐ thinking",
+    "⠈ thinking",
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// COMPACT FRAMES - For smaller spaces
+// STATUS BAR COMPANION - Activity indicator
 // ═══════════════════════════════════════════════════════════════════════════
 
-static COMPACT_IDLE: [&str; 2] = [
-    r#".-----.
-|O w O|
-'-+-+-'"#,
-    r#".-----.
-|O u O|
-'-+-+-'"#,
+static STATUS_IDLE: [&str; 4] = ["[◉]", "[◎]", "[○]", "[◎]"];
+
+static STATUS_LOADING: [&str; 8] = [
+    "[▰▱▱]",
+    "[▰▰▱]",
+    "[▰▰▰]",
+    "[▱▰▰]",
+    "[▱▱▰]",
+    "[▱▱▱]",
+    "[▱▰▱]",
+    "[▰▱▰]",
 ];
 
-static COMPACT_LOADING: [&str; 4] = [
-    r#".-----.|
-|O o O|
-'-+-+-'"#,
-    r#".-----./
-|O o O|
-'-+-+-'"#,
-    r#".-----.-
-|O o O|
-'-+-+-'"#,
-    r#".-----.\
-|O o O|
-'-+-+-'"#,
+static STATUS_SEARCHING: [&str; 6] = [
+    "[◐]", "[◓]", "[◑]", "[◒]", "[◐]", "[◓]",
 ];
 
-static COMPACT_SEARCHING: [&str; 2] = [
-    r#".-----.(?)
-|O>? O|
-'-+-+-'"#,
-    r#".-----. (?)
-|O ?<O|
-'-+-+-'"#,
-];
+static STATUS_SUCCESS: [&str; 3] = ["[✓]", "[★]", "[✓]"];
 
-static COMPACT_SUCCESS: [&str; 2] = [
-    r#".-----.*
-|^ V ^|
-'-\-/-'"#,
-    r#".-----.*
-|^ u ^|*
-'-/-\-'"#,
-];
+static STATUS_ERROR: [&str; 3] = ["[✗]", "[!]", "[✗]"];
 
-static COMPACT_ERROR: [&str; 2] = [
-    r#".-----.X
-|; n ;|
-'-+-+-'"#,
-    r#".-----.X
-|T~~ T|
-'-+-+-'"#,
-];
+static STATUS_THINKING: [&str; 4] = ["[·]", "[··]", "[···]", "[··]"];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SPLASH SCREEN
+// SPLASH - Minimal splash for empty state
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Get the full splash screen art for startup
-pub fn splash_art() -> &'static str {
-    r#"
-         .-----------------.
-         |                 |
-         |    O       O    |
-         |                 |
-         |       V         |
-         |                 |
-         '--------+--------'
-              ///|||\\\
-             / / ||| \ \
-            /  / ||| \  \
-           /  /  |||  \  \
-          /  /   |||   \  \
-
-     ___   ____  _   _  _
-    / _ \ |_  / | | | || |
-   | |_| | / /  | |_| || |__
-   |_| |_|/___|  \___/ |____|
-
-        Terminal Web Browser
-         ~ Surf the web! ~
-"#
-}
-
-/// Get compact splash for smaller terminals
 pub fn mini_splash() -> &'static str {
     r#"
-    .-------.
-    | O   O |
-    |   V   |   AZUL
-    '---+---'   Browser
-   ///|||||\\\
-  / / ||||| \ \
+          ◉
+
+    A Z U L
+
+    / to search
+    ? for help
 "#
 }
 
-/// Get goodbye art
+pub fn splash_art() -> &'static str {
+    mini_splash()
+}
+
 pub fn bye_art() -> &'static str {
-    r#"
-    .-------.
-    | ^   ^ |
-    |   u   |  Bye-bye!
-    '---+---'
-   \ \ ||||| / /   See you
-    \\\|||||///     soon~
-"#
+    "◉ bye!"
 }
 
 #[cfg(test)]
@@ -482,29 +228,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_mascot_states() {
+    fn test_companion_states() {
         let mut mascot = Mascot::new();
-        assert_eq!(mascot.state(), MascotState::Idle);
+        assert_eq!(mascot.state(), CompanionState::Idle);
 
-        mascot.set_state(MascotState::Loading);
-        assert_eq!(mascot.state(), MascotState::Loading);
-
-        // Should reset frame on state change
-        mascot.tick();
-        mascot.tick();
-        mascot.set_state(MascotState::Success);
-        assert_eq!(mascot.frame(), 0);
+        mascot.set_state(CompanionState::Loading);
+        assert_eq!(mascot.state(), CompanionState::Loading);
     }
 
     #[test]
-    fn test_mascot_animation() {
+    fn test_companion_animation() {
         let mut mascot = Mascot::new();
-        let frame1 = mascot.view();
+        mascot.set_state(CompanionState::Loading);
 
+        let first = mascot.view();
         mascot.tick();
-        mascot.tick();
+        let second = mascot.view();
 
-        // Different frame after ticks
-        let _frame2 = mascot.view();
+        // Should cycle through frames
+        assert!(!first.is_empty());
+        assert!(!second.is_empty());
+    }
+
+    #[test]
+    fn test_all_views() {
+        let mascot = Mascot::new();
+        assert!(!mascot.view().is_empty());
+        assert!(!mascot.view_with_label().is_empty());
+        assert!(!mascot.view_status().is_empty());
     }
 }

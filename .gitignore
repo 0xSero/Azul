@@ -2,3 +2,21 @@ target/
 *.swp
 *.swo
 .DS_Store
+
+# Secrets and credentials
+*.env
+.env*
+config.json
+*.key
+*.pem
+*_rsa
+*_ed25519
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml

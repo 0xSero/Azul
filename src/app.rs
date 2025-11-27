@@ -794,6 +794,23 @@ impl App {
                     }
                 });
             }
+            QueryTarget::MultiSearch { query } => {
+                self.status_message = format!("Multi-engine search: {}", query);
+                self.mascot.set_state(MascotState::Searching);
+
+                std::thread::spawn(move || {
+                    match SearchManager::new() {
+                        Ok(manager) => {
+                            let response = manager.search_aggregated(&query);
+                            let page = response.to_page();
+                            let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
+                        }
+                        Err(err) => {
+                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Search error: {}", err)));
+                        }
+                    }
+                });
+            }
         }
     }
 
