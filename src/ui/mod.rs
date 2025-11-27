@@ -650,7 +650,7 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(AZUL_BLUE))
-        .title(" AI Chat | c to close | Enter to send ")
+        .title(" AI Chat | j/k scroll | Ctrl+↑/↓ model | Enter send | c close ")
         .style(Style::default().bg(TOKYO_BG));
 
     if app.chat_session.is_none() {
@@ -702,7 +702,8 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
         let msg_para = Paragraph::new(lines)
             .block(Block::default())
             .style(Style::default().fg(TOKYO_TEXT))
-            .wrap(Wrap { trim: true });
+            .wrap(Wrap { trim: true })
+            .scroll((app.chat_scroll as u16, 0));
         frame.render_widget(msg_para, chunks[0]);
     }
 

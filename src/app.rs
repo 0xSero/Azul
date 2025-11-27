@@ -913,6 +913,25 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.panel_mode = PanelMode::None;
             }
+            // Scrolling
+            KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.chat_scroll > 0 {
+                    self.chat_scroll -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chat_scroll += 1;
+            }
+            KeyCode::PageUp => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.chat_scroll += 10;
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.chat_scroll = 0;
+            }
+            // Model switching
             KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Cycle to previous model
                 if let Some(session) = &mut self.chat_session {
