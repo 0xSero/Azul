@@ -569,6 +569,33 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('o') => {
+                // Open current URL in system browser/viewer
+                if let Some(tab) = self.tabs.active_tab() {
+                    if !tab.url.is_empty() {
+                        let url = tab.url.clone();
+                        match std::process::Command::new("xdg-open")
+                            .arg(&url)
+                            .spawn()
+                        {
+                            Ok(_) => {
+                                self.status_message = format!("Opened in system viewer: {}", url);
+                            }
+                            Err(_) => {
+                                // Try macOS open command as fallback
+                                match std::process::Command::new("open").arg(&url).spawn() {
+                                    Ok(_) => {
+                                        self.status_message = format!("Opened in system viewer: {}", url);
+                                    }
+                                    Err(e) => {
+                                        self.status_message = format!("Failed to open: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             KeyCode::Left | KeyCode::Char('p') => {
                 // Go back in history
                 if let Some(tab) = self.tabs.active_tab_mut() {

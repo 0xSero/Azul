@@ -196,6 +196,95 @@ impl Browser {
         // Get the final URL after redirects
         let final_url = response.url().to_string();
 
+        // Check Content-Type to handle binary files gracefully
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("text/html")
+            .to_lowercase();
+
+        // Handle non-HTML content types
+        if content_type.contains("application/pdf") {
+            return Ok(Page {
+                url: final_url.clone(),
+                title: "PDF Document".to_string(),
+                content_lines: vec![
+                    "═══════════════════════════════════════════".to_string(),
+                    "              PDF Document".to_string(),
+                    "═══════════════════════════════════════════".to_string(),
+                    "".to_string(),
+                    format!("URL: {}", final_url),
+                    "".to_string(),
+                    "This is a PDF file. Terminal browsers cannot".to_string(),
+                    "render PDF content directly.".to_string(),
+                    "".to_string(),
+                    "Options:".to_string(),
+                    "  • Press 'o' to open in system viewer".to_string(),
+                    "  • Copy the URL and open in a browser".to_string(),
+                    "".to_string(),
+                ],
+                raw_content: String::new(),
+                links: vec![],
+            });
+        }
+
+        if content_type.contains("image/") {
+            let image_type = content_type.split('/').nth(1).unwrap_or("unknown");
+            return Ok(Page {
+                url: final_url.clone(),
+                title: format!("Image ({})", image_type.to_uppercase()),
+                content_lines: vec![
+                    "═══════════════════════════════════════════".to_string(),
+                    format!("              Image ({})", image_type.to_uppercase()),
+                    "═══════════════════════════════════════════".to_string(),
+                    "".to_string(),
+                    format!("URL: {}", final_url),
+                    "".to_string(),
+                    "This is an image file. Terminal browsers".to_string(),
+                    "cannot display images directly.".to_string(),
+                    "".to_string(),
+                    "Options:".to_string(),
+                    "  • Press 'o' to open in system viewer".to_string(),
+                    "  • Copy the URL and open in a browser".to_string(),
+                    "".to_string(),
+                ],
+                raw_content: String::new(),
+                links: vec![],
+            });
+        }
+
+        // For other binary types, show a warning
+        if content_type.contains("application/octet-stream")
+            || content_type.contains("application/zip")
+            || content_type.contains("application/x-")
+            || content_type.contains("video/")
+            || content_type.contains("audio/")
+        {
+            return Ok(Page {
+                url: final_url.clone(),
+                title: "Binary File".to_string(),
+                content_lines: vec![
+                    "═══════════════════════════════════════════".to_string(),
+                    "              Binary File".to_string(),
+                    "═══════════════════════════════════════════".to_string(),
+                    "".to_string(),
+                    format!("URL: {}", final_url),
+                    format!("Type: {}", content_type),
+                    "".to_string(),
+                    "This is a binary file that cannot be".to_string(),
+                    "displayed in a terminal browser.".to_string(),
+                    "".to_string(),
+                    "Options:".to_string(),
+                    "  • Press 'o' to open/download".to_string(),
+                    "  • Copy the URL and download manually".to_string(),
+                    "".to_string(),
+                ],
+                raw_content: String::new(),
+                links: vec![],
+            });
+        }
+
         let html_content = response.text().context("Failed to read response body")?;
 
         let document = Html::parse_document(&html_content);
