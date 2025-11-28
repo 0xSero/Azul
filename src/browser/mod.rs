@@ -217,26 +217,49 @@ impl Browser {
             || url_lower.ends_with(".webp")
             || url_lower.ends_with(".svg");
 
-        // Handle non-HTML content types
+        // Handle PDF files - extract text using pdftotext
         if is_pdf {
+            // Get PDF bytes
+            let pdf_bytes = response.bytes().context("Failed to read PDF bytes")?;
+
+            // Try to extract text using pdftotext
+            let content_lines = match extract_pdf_text(&pdf_bytes) {
+                Ok(text) => {
+                    let mut lines: Vec<String> = vec![
+                        "═══════════════════════════════════════════".to_string(),
+                        "              PDF Document".to_string(),
+                        "═══════════════════════════════════════════".to_string(),
+                        format!("URL: {}", final_url),
+                        "Press 'o' to open in system PDF viewer".to_string(),
+                        "═══════════════════════════════════════════".to_string(),
+                        "".to_string(),
+                    ];
+                    lines.extend(text.lines().map(|s| s.to_string()));
+                    lines
+                }
+                Err(e) => {
+                    vec![
+                        "═══════════════════════════════════════════".to_string(),
+                        "              PDF Document".to_string(),
+                        "═══════════════════════════════════════════".to_string(),
+                        "".to_string(),
+                        format!("URL: {}", final_url),
+                        "".to_string(),
+                        format!("Failed to extract text: {}", e),
+                        "".to_string(),
+                        "Install poppler-utils for PDF text extraction:".to_string(),
+                        "  sudo apt install poppler-utils".to_string(),
+                        "".to_string(),
+                        "Or press 'o' to open in system viewer".to_string(),
+                        "".to_string(),
+                    ]
+                }
+            };
+
             return Ok(Page {
                 url: final_url.clone(),
                 title: "PDF Document".to_string(),
-                content_lines: vec![
-                    "═══════════════════════════════════════════".to_string(),
-                    "              PDF Document".to_string(),
-                    "═══════════════════════════════════════════".to_string(),
-                    "".to_string(),
-                    format!("URL: {}", final_url),
-                    "".to_string(),
-                    "This is a PDF file. Terminal browsers cannot".to_string(),
-                    "render PDF content directly.".to_string(),
-                    "".to_string(),
-                    "Options:".to_string(),
-                    "  • Press 'o' to open in system viewer".to_string(),
-                    "  • Copy the URL and open in a browser".to_string(),
-                    "".to_string(),
-                ],
+                content_lines,
                 raw_content: String::new(),
                 links: vec![],
             });
@@ -427,6 +450,54 @@ fn resolve_url(base: &Url, href: &str) -> String {
     match base.join(href) {
         Ok(resolved) => resolved.to_string(),
         Err(_) => href.to_string(),
+    }
+}
+
+/// Extract text from PDF bytes using pdftotext (poppler-utils)
+fn extract_pdf_text(pdf_bytes: &[u8]) -> Result<String> {
+    use std::io::Write;
+    use std::process::Command;
+
+    // Create a temp file for the PDF
+    let temp_dir = std::env::temp_dir();
+    let pdf_path = temp_dir.join(format!("azul_pdf_{}.pdf", std::process::id()));
+
+    // Write PDF to temp file
+    let mut file = std::fs::File::create(&pdf_path)
+        .context("Failed to create temp PDF file")?;
+    file.write_all(pdf_bytes)
+        .context("Failed to write PDF to temp file")?;
+    drop(file);
+
+    // Run pdftotext to extract text (- means stdout)
+    let output = Command::new("pdftotext")
+        .arg("-layout")  // Maintain layout
+        .arg(&pdf_path)
+        .arg("-")        // Output to stdout
+        .output();
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&pdf_path);
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                if text.trim().is_empty() {
+                    anyhow::bail!("PDF appears to be image-based or has no extractable text")
+                }
+                Ok(text)
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                anyhow::bail!("pdftotext failed: {}", stderr)
+            }
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::bail!("pdftotext not found - install poppler-utils")
+            }
+            anyhow::bail!("Failed to run pdftotext: {}", e)
+        }
     }
 }
 
