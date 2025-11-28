@@ -201,11 +201,24 @@ impl Browser {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("text/html")
+            .unwrap_or("")
             .to_lowercase();
 
+        // Also check URL extension as fallback (some servers lie about content-type)
+        let url_lower = final_url.to_lowercase();
+        let is_pdf = content_type.contains("application/pdf")
+            || url_lower.ends_with(".pdf")
+            || url_lower.contains(".pdf?");
+        let is_image = content_type.contains("image/")
+            || url_lower.ends_with(".png")
+            || url_lower.ends_with(".jpg")
+            || url_lower.ends_with(".jpeg")
+            || url_lower.ends_with(".gif")
+            || url_lower.ends_with(".webp")
+            || url_lower.ends_with(".svg");
+
         // Handle non-HTML content types
-        if content_type.contains("application/pdf") {
+        if is_pdf {
             return Ok(Page {
                 url: final_url.clone(),
                 title: "PDF Document".to_string(),
@@ -229,8 +242,12 @@ impl Browser {
             });
         }
 
-        if content_type.contains("image/") {
-            let image_type = content_type.split('/').nth(1).unwrap_or("unknown");
+        if is_image {
+            let image_type = if content_type.contains("image/") {
+                content_type.split('/').nth(1).unwrap_or("unknown")
+            } else {
+                url_lower.split('.').last().unwrap_or("unknown")
+            };
             return Ok(Page {
                 url: final_url.clone(),
                 title: format!("Image ({})", image_type.to_uppercase()),
@@ -287,6 +304,46 @@ impl Browser {
 
         let html_content = response.text().context("Failed to read response body")?;
 
+        // Check for binary content by looking at first bytes or high ratio of non-printable chars
+        let first_bytes: Vec<u8> = html_content.bytes().take(16).collect();
+        let is_likely_binary = html_content.starts_with("%PDF")
+            || first_bytes.starts_with(&[0x89, b'P', b'N', b'G'])  // PNG
+            || html_content.starts_with("GIF8")
+            || first_bytes.starts_with(&[0xFF, 0xD8, 0xFF])        // JPEG
+            || first_bytes.starts_with(&[b'P', b'K', 0x03, 0x04])  // ZIP
+            || {
+                // Check if first 1000 chars have high ratio of non-printable
+                let sample: String = html_content.chars().take(1000).collect();
+                let non_printable = sample.chars().filter(|c| {
+                    !c.is_ascii_graphic() && !c.is_ascii_whitespace()
+                }).count();
+                non_printable > sample.len() / 4  // More than 25% non-printable
+            };
+
+        if is_likely_binary {
+            return Ok(Page {
+                url: final_url.clone(),
+                title: "Binary File".to_string(),
+                content_lines: vec![
+                    "═══════════════════════════════════════════".to_string(),
+                    "              Binary File".to_string(),
+                    "═══════════════════════════════════════════".to_string(),
+                    "".to_string(),
+                    format!("URL: {}", final_url),
+                    "".to_string(),
+                    "This file contains binary data that cannot".to_string(),
+                    "be displayed in a terminal browser.".to_string(),
+                    "".to_string(),
+                    "Options:".to_string(),
+                    "  • Press 'o' to open in system viewer".to_string(),
+                    "  • Copy the URL and open in a browser".to_string(),
+                    "".to_string(),
+                ],
+                raw_content: String::new(),
+                links: vec![],
+            });
+        }
+
         let document = Html::parse_document(&html_content);
 
         // Extract title
@@ -320,9 +377,25 @@ impl Browser {
             })
             .collect();
 
-        // Convert HTML to readable text
+        // Convert HTML to readable text and sanitize non-printable characters
         let content = html2text::from_read(html_content.as_bytes(), 100);
-        let content_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let content_lines: Vec<String> = content
+            .lines()
+            .map(|s| {
+                // Replace non-printable chars with spaces, keeping only safe characters
+                s.chars()
+                    .map(|c| {
+                        if c.is_ascii_graphic() || c == ' ' || c == '\t' {
+                            c
+                        } else if c > '\u{00A0}' && (c.is_alphanumeric() || c.is_ascii_punctuation()) {
+                            c
+                        } else {
+                            ' '
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect();
 
         Ok(Page {
             url: final_url,
