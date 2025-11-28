@@ -14,10 +14,24 @@ pub enum CompanionState {
     Thinking,
 }
 
+/// Walking direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkDirection {
+    Left,
+    Right,
+    Idle,
+}
+
 /// The Azul companion - follows you everywhere
 pub struct Mascot {
     state: CompanionState,
     frame: usize,
+    // Walking mascot properties
+    pub position: i16,       // X position on screen
+    pub direction: WalkDirection,
+    pub screen_width: u16,   // Track screen width for bounds
+    walk_frame: usize,
+    idle_counter: usize,     // How long we've been idle
 }
 
 impl Mascot {
@@ -25,6 +39,11 @@ impl Mascot {
         Self {
             state: CompanionState::Idle,
             frame: 0,
+            position: 10,
+            direction: WalkDirection::Right,
+            screen_width: 80,
+            walk_frame: 0,
+            idle_counter: 0,
         }
     }
 
@@ -41,6 +60,100 @@ impl Mascot {
 
     pub fn tick(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        self.walk_frame = self.walk_frame.wrapping_add(1);
+
+        // Update walking position every few frames
+        if self.walk_frame % 3 == 0 {
+            match self.direction {
+                WalkDirection::Right => {
+                    self.position += 1;
+                    // Turn around at edge (leave room for mascot width ~6 chars)
+                    if self.position >= (self.screen_width as i16 - 8) {
+                        self.direction = WalkDirection::Left;
+                        self.idle_counter = 0;
+                    }
+                }
+                WalkDirection::Left => {
+                    self.position -= 1;
+                    // Turn around at left edge
+                    if self.position <= 2 {
+                        self.direction = WalkDirection::Right;
+                        self.idle_counter = 0;
+                    }
+                }
+                WalkDirection::Idle => {
+                    self.idle_counter += 1;
+                    // Start walking again after being idle
+                    if self.idle_counter > 20 {
+                        self.direction = if self.position < (self.screen_width as i16 / 2) {
+                            WalkDirection::Right
+                        } else {
+                            WalkDirection::Left
+                        };
+                        self.idle_counter = 0;
+                    }
+                }
+            }
+        }
+
+        // Occasionally pause to look around
+        if self.walk_frame % 50 == 0 && self.direction != WalkDirection::Idle {
+            if rand_simple() % 4 == 0 {
+                self.direction = WalkDirection::Idle;
+            }
+        }
+    }
+
+    /// Set screen width for boundary checking
+    pub fn set_screen_width(&mut self, width: u16) {
+        self.screen_width = width;
+        // Clamp position if screen got smaller
+        if self.position >= (width as i16 - 8) {
+            self.position = (width as i16 - 8).max(2);
+        }
+    }
+
+    /// Get the walking mascot sprite - cute little creature
+    pub fn walking_sprite(&self) -> &'static str {
+        match self.state {
+            CompanionState::Loading | CompanionState::Searching => {
+                // Running/busy - excited!
+                let frames = ["ᕕ(°▽°)ᕗ", "ᕕ(°◡°)ᕗ", "ᕕ(°▽°)ᕗ", "ᕕ(°ᴗ°)ᕗ"];
+                frames[self.walk_frame % frames.len()]
+            }
+            CompanionState::Success => {
+                "\\(◕‿◕)/"  // celebrating!
+            }
+            CompanionState::Error => {
+                "(◕︵◕)"  // sad
+            }
+            CompanionState::Thinking => {
+                let frames = ["(◕.◕)", "(◕..)", "(..◕)", "(◕.◕)"];
+                frames[self.walk_frame % frames.len()]
+            }
+            _ => {
+                // Cute idle/walking
+                match self.direction {
+                    WalkDirection::Right => {
+                        let frames = ["(◕ᴗ◕)>", "(◕‿◕)ᐳ", "(◕ᴗ◕)›", "(◕‿◕)>"];
+                        frames[self.walk_frame % frames.len()]
+                    }
+                    WalkDirection::Left => {
+                        let frames = ["<(◕ᴗ◕)", "ᐸ(◕‿◕)", "‹(◕ᴗ◕)", "<(◕‿◕)"];
+                        frames[self.walk_frame % frames.len()]
+                    }
+                    WalkDirection::Idle => {
+                        let frames = ["(◕‿◕)", "(◕ᴗ◕)", "(◕‿◕)", "(◕◡◕)"];
+                        frames[self.walk_frame % frames.len()]
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get position as usize for rendering
+    pub fn x_position(&self) -> u16 {
+        self.position.max(0) as u16
     }
 
     /// The main companion - ultra compact, 1-2 chars
@@ -223,6 +336,16 @@ pub fn bye_art() -> &'static str {
     "◉ bye!"
 }
 
+/// Simple pseudo-random for mascot behavior (no external deps)
+fn rand_simple() -> usize {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    nanos as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +379,17 @@ mod tests {
         assert!(!mascot.view().is_empty());
         assert!(!mascot.view_with_label().is_empty());
         assert!(!mascot.view_status().is_empty());
+    }
+
+    #[test]
+    fn test_walking() {
+        let mut mascot = Mascot::new();
+        mascot.set_screen_width(80);
+        let start_pos = mascot.position;
+        for _ in 0..10 {
+            mascot.tick();
+        }
+        // Should have moved
+        assert_ne!(mascot.position, start_pos);
     }
 }

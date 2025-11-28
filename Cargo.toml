@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["Azul Team"]
 description = "A beautiful terminal web browser with AI-powered summaries"
 
+[[bin]]
+name = "azul"
+path = "src/main.rs"
+
 [dependencies]
 # TUI Framework (same as Home-dash)
 ratatui = "0.28"

@@ -57,12 +57,12 @@ fi
 cd "$PROJECT_DIR"
 
 # Build if needed
-if [ ! -f "target/release/azul-browse" ] || [ "$(find src -newer target/release/azul-browse 2>/dev/null | head -1)" ]; then
+if [ ! -f "target/release/azul" ] || [ "$(find src -newer target/release/azul 2>/dev/null | head -1)" ]; then
     echo -e "${GREEN}Building...${NC}"
     cargo build --release
     echo ""
 fi
 
 # Run
-echo -e "${GREEN}Starting Azul Browse...${NC}"
-exec ./target/release/azul-browse "$@"
+echo -e "${GREEN}Starting Azul...${NC}"
+exec ./target/release/azul "$@"

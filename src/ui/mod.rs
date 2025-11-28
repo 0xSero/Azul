@@ -34,6 +34,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         return;
     }
 
+    // Clear entire frame first to prevent artifacts when switching modes
+    frame.render_widget(Clear, full);
+
     // Render neon border
     frame.render_widget(
         NeonBorder {
@@ -61,23 +64,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_tab_bar(frame, chunks[0], app);
     render_url_bar(frame, chunks[1], app);
 
-    // Always clear the main content area to prevent artifacts
-    frame.render_widget(Clear, chunks[2]);
-
-    // Chat mode: split into content and chat (hides links)
-    if app.panel_mode == PanelMode::Chat {
-        let split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(65),
-                Constraint::Percentage(35),
-            ])
-            .split(chunks[2]);
-        render_content_only(frame, split[0], app);
-        render_chat_side_panel(frame, split[1], app);
-    } else {
-        render_main_content(frame, chunks[2], app);
-    }
+    // Always show 3-panel layout: Links (15%) | Content (50%) | Chat (35%)
+    let split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(15),  // Links (left)
+            Constraint::Percentage(50),  // Content (middle)
+            Constraint::Percentage(35),  // Chat (right)
+        ])
+        .split(chunks[2]);
+    render_compact_sidebar(frame, split[0], app);
+    render_content_only(frame, split[1], app);
+    render_chat_side_panel(frame, split[2], app);
 
     render_status_bar(frame, chunks[3], app);
 
@@ -241,7 +239,7 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             format!(" {} ", mode_label)
         })
-        .style(Style::default().bg(TOKYO_BG));
+        .style(Style::default());
 
     if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
@@ -389,7 +387,84 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
+/// Compact sidebar for when chat is open (narrow links panel)
+fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+    let is_focused = app.focus == Focus::Sidebar;
+
+    // Animated green-blue border when focused
+    let border_color = if is_focused {
+        // Cycle between green and blue based on animation
+        let colors = [
+            Color::Rgb(148, 226, 213),  // Teal
+            Color::Rgb(137, 180, 250),  // Blue
+            Color::Rgb(166, 227, 161),  // Green
+            Color::Rgb(116, 199, 236),  // Cyan
+        ];
+        colors[app.animation_tick % colors.len()]
+    } else {
+        TOKYO_BLUE
+    };
+
+    let total_links = app.current_page().map(|p| p.links.len()).unwrap_or(0);
+    let selected = app.sidebar_selected();
+
+    let title = format!(" {} ", total_links);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(title)
+        .style(Style::default());
+
+    if let Some(page) = app.current_page() {
+        let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
+        let mut visible_rows = inner.height.saturating_sub(1) as usize;
+        if visible_rows == 0 {
+            visible_rows = 1;
+        }
+
+        // Calculate offset for scrolling
+        let mut offset = 0;
+        if selected >= visible_rows {
+            offset = selected + 1 - visible_rows;
+        }
+
+        // Show link number and truncated text
+        let max_text_width = inner.width.saturating_sub(5) as usize; // Leave room for number and space
+        let items: Vec<ListItem> = page
+            .links
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(visible_rows)
+            .map(|(i, link)| {
+                let is_selected = i == selected;
+                let style = if is_selected && is_focused {
+                    Style::default().fg(TOKYO_BG).bg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                } else if is_selected {
+                    Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(TOKYO_TEXT)
+                };
+
+                // Show number + truncated link text
+                let text = if link.text.is_empty() { &link.url } else { &link.text };
+                let truncated = truncate_to_width(text, max_text_width);
+                ListItem::new(Line::from(Span::styled(format!("{:2} {}", i + 1, truncated), style)))
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(block)
+            .style(Style::default().fg(TOKYO_TEXT));
+
+        frame.render_widget(list, area);
+    } else {
+        frame.render_widget(block, area);
+    }
+}
+
+fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut App) {
     let focus_name = match app.focus {
         Focus::Content => "Content",
         Focus::Sidebar => "Sidebar",
@@ -402,7 +477,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     // Tab info
     let tab_info = format!("[{}/{}]", app.tabs.active_index() + 1, app.tabs.count());
 
-    // Companion follows you in the status bar
+    // Status indicator
     let companion = app.mascot.view_status();
 
     let primary_line = Line::from(vec![
@@ -415,9 +490,16 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(&app.status_message, Style::default().fg(TOKYO_TEXT)),
     ]);
 
+    // Update mascot position
+    app.mascot.set_screen_width(area.width.saturating_sub(4));
+    let mascot_sprite = app.mascot.walking_sprite();
+
+    // Shortcuts line with cute mascot at the end
     let shortcuts = "/ search  t tab  b bookmarks  H history  c chat  ? help  q quit";
     let secondary_line = Line::from(vec![
         Span::styled(shortcuts, Style::default().fg(TOKYO_COMMENT)),
+        Span::raw("  "),
+        Span::styled(mascot_sprite, Style::default().fg(Color::Rgb(215, 119, 87))), // Clawd orange color
     ]);
 
     let status = Paragraph::new(vec![primary_line, secondary_line])
@@ -441,7 +523,7 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(TOKYO_ORANGE))
         .title(format!(" Bookmarks ({}) | j/k nav | Enter open | d delete | Esc close ", app.bookmarks_list.len()))
-        .style(Style::default().bg(TOKYO_BG));
+        .style(Style::default());
 
     let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
     let visible_rows = inner.height.saturating_sub(1) as usize;
@@ -498,9 +580,9 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .border_style(Style::default().fg(TOKYO_BLUE))
         .title(format!(" History ({}) | j/k nav | Enter open | Esc close ", app.history_list.len()))
-        .style(Style::default().bg(TOKYO_BG));
+        .style(Style::default());
 
     let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
     let visible_rows = inner.height.saturating_sub(1) as usize;
@@ -599,7 +681,7 @@ fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(AZUL_BLUE))
                 .title(format!(" {} help ", companion))
-                .style(Style::default().bg(TOKYO_BG)),
+                .style(Style::default()),
         )
         .style(Style::default().fg(TOKYO_TEXT));
 
@@ -685,35 +767,28 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
     out
 }
 
-// Cosmic dark theme for chat panel - deep space with subtle purple glow
-const COSMIC_BG: Color = Color::Rgb(13, 13, 23);           // Deep space black
-const COSMIC_BORDER: Color = Color::Rgb(88, 66, 139);      // Cosmic purple
-const COSMIC_ACCENT: Color = Color::Rgb(138, 99, 210);     // Nebula violet
-const COSMIC_TEXT_DIM: Color = Color::Rgb(140, 140, 170);  // Starlight dim
-const COSMIC_GLOW: Color = Color::Rgb(100, 149, 237);      // Cornflower blue glow
-
-/// Side panel chat - integrates with main content area (cosmic dark theme)
+/// Side panel chat - integrates with main content area (consistent Tokyo Night theme)
 fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
     // Clear the area first to avoid artifacts
     frame.render_widget(Clear, area);
 
-    // Cosmic themed border colors
-    let border_color = if app.chat_focused { COSMIC_GLOW } else { COSMIC_BORDER };
+    // Consistent Tokyo Night theme colors
+    let border_color = if app.chat_focused { AZUL_BLUE } else { TOKYO_BLUE };
     let title = if app.chat_focused { " CHAT " } else { " chat " };
 
-    // Create block first and render it to establish cosmic background
+    // Create block with Tokyo Night styling
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(Span::styled(title, Style::default().fg(COSMIC_ACCENT)))
-        .style(Style::default().bg(COSMIC_BG));
+        .title(Span::styled(title, Style::default().fg(AZUL_BLUE)))
+        .style(Style::default());
 
     // Render block first to fill background
     frame.render_widget(block.clone(), area);
 
     if app.chat_session.is_none() {
         let empty = Paragraph::new("Configure AI in settings")
-            .style(Style::default().fg(COSMIC_TEXT_DIM).bg(COSMIC_BG))
+            .style(Style::default().fg(TOKYO_COMMENT))
             .alignment(Alignment::Center);
         frame.render_widget(empty, area.inner(Margin { horizontal: 1, vertical: 1 }));
         return;
@@ -745,56 +820,102 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
             match msg.role {
                 crate::chat::Role::System => continue,
                 crate::chat::Role::User => {
-                    // User message - cosmic accent prefix
+                    // User message - azul blue prefix, strip browser context for display
+                    let display_content = if msg.content.contains("[Browser Context]") {
+                        // Extract just the user's actual message after the context
+                        msg.content.split("\n\n").last().unwrap_or(&msg.content).to_string()
+                    } else {
+                        msg.content.clone()
+                    };
                     all_lines.push(Line::from(vec![
-                        Span::styled("▸ ", Style::default().fg(COSMIC_GLOW)),
-                        Span::styled(&msg.content, Style::default().fg(TOKYO_TEXT)),
+                        Span::styled("▸ ", Style::default().fg(AZUL_BLUE)),
+                        Span::styled(display_content, Style::default().fg(TOKYO_TEXT)),
                     ]));
                     all_lines.push(Line::from(""));
                 }
                 crate::chat::Role::Assistant => {
-                    // AI message - render as markdown with cosmic prefix
-                    all_lines.push(Line::from(Span::styled("◆ ", Style::default().fg(COSMIC_ACCENT))));
-                    let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
-                    let styled = md_renderer.render(&content_lines);
-                    all_lines.extend(styled);
+                    // Check for tool calls in the message
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        for tc in tool_calls {
+                            all_lines.push(Line::from(vec![
+                                Span::styled("⚙ ", Style::default().fg(TOKYO_ORANGE)),
+                                Span::styled(&tc.name, Style::default().fg(TOKYO_ORANGE)),
+                            ]));
+                        }
+                    }
+                    // AI message - render as markdown with green prefix
+                    if !msg.content.is_empty() {
+                        all_lines.push(Line::from(Span::styled("◆ ", Style::default().fg(TOKYO_GREEN))));
+                        let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
+                        let styled = md_renderer.render(&content_lines);
+                        all_lines.extend(styled);
+                    }
                     all_lines.push(Line::from(""));
+                }
+                crate::chat::Role::Tool => {
+                    // Tool result - show minimally
+                    all_lines.push(Line::from(vec![
+                        Span::styled("  ↳ ", Style::default().fg(TOKYO_COMMENT)),
+                        Span::styled(truncate_to_width(&msg.content, wrap_width.saturating_sub(4)), Style::default().fg(TOKYO_COMMENT)),
+                    ]));
                 }
                 _ => {}
             }
         }
 
-        // Calculate visible area with scrolling
-        // chat_scroll represents "lines scrolled back from bottom"
-        // 0 = showing newest messages, higher = scrolled back to see older
-        let visible_height = chunks[0].height as usize;
-        let total_lines = all_lines.len();
-        let max_scroll = total_lines.saturating_sub(visible_height);
-        let scroll_back = (app.chat_scroll as usize).min(max_scroll);
-        let scroll_from_top = max_scroll.saturating_sub(scroll_back);
+        // Pre-wrap lines to get accurate line count for scrolling
+        let wrap_width = chunks[0].width.saturating_sub(2) as usize;
+        let mut wrapped_lines: Vec<Line> = Vec::new();
+        for line in all_lines {
+            if line.width() == 0 {
+                wrapped_lines.push(line);
+            } else {
+                // Check if line needs wrapping
+                let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                if line_str.len() > wrap_width && wrap_width > 0 {
+                    // Simple wrap - split into chunks
+                    for chunk in textwrap::wrap(&line_str, wrap_width) {
+                        wrapped_lines.push(Line::from(Span::styled(
+                            chunk.to_string(),
+                            line.spans.first().map(|s| s.style).unwrap_or_default(),
+                        )));
+                    }
+                } else {
+                    wrapped_lines.push(line);
+                }
+            }
+        }
 
-        let visible: Vec<Line> = all_lines
+        // Scrolling: chat_scroll = 0 means at bottom (newest), higher = scrolled up
+        let visible_height = chunks[0].height as usize;
+        let total_lines = wrapped_lines.len();
+
+        // Calculate scroll - show from bottom by default
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        let clamped_scroll = app.chat_scroll.min(max_scroll);
+        let start_line = max_scroll.saturating_sub(clamped_scroll);
+
+        let visible: Vec<Line> = wrapped_lines
             .into_iter()
-            .skip(scroll_from_top)
+            .skip(start_line)
             .take(visible_height)
             .collect();
 
         let msg_para = Paragraph::new(visible)
-            .style(Style::default().fg(TOKYO_TEXT).bg(COSMIC_BG))
-            .wrap(Wrap { trim: false });
+            .style(Style::default().fg(TOKYO_TEXT));
         frame.render_widget(msg_para, chunks[0]);
     }
 
-    // Input area with cosmic styling
+    // Input area with Tokyo Night styling
     let input_block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(COSMIC_BORDER))
-        .style(Style::default().bg(COSMIC_BG));
+        .border_style(Style::default().fg(TOKYO_BLUE))
+        .style(Style::default());
 
     let input_text = format!("❯ {}_", app.chat_input);
     let input = Paragraph::new(input_text)
         .block(input_block)
-        .style(Style::default().fg(COSMIC_GLOW).bg(COSMIC_BG))
+        .style(Style::default().fg(AZUL_BLUE))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, chunks[1]);
 }
@@ -811,9 +932,9 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .border_style(Style::default().fg(TOKYO_BLUE))
         .title(" Settings | Esc to close ")
-        .style(Style::default().bg(TOKYO_BG));
+        .style(Style::default());
 
     let settings_text = vec![
         Line::from(vec![Span::styled("Browser Settings", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD))]),
@@ -878,74 +999,164 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let panel_area = centered_rect(80, 80, area);
+    // Calculate content area position (same as main content panel: skip 15% links, use 50% content)
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),   // Tab bar
+            Constraint::Length(3),   // URL bar
+            Constraint::Min(0),      // Main content
+            Constraint::Length(3),   // Status bar
+        ])
+        .split(area);
+
+    let content_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(15),  // Links
+            Constraint::Percentage(50),  // Content - this is where RAG goes
+            Constraint::Percentage(35),  // Chat
+        ])
+        .split(main_chunks[2]);
+
+    let panel_area = content_split[1];  // Use the content area
     frame.render_widget(Clear, panel_area);
+
+    // Loading spinner animation
+    let spinner = if app.rag_loading {
+        let spinners = ["◐", "◓", "◑", "◒"];
+        format!(" {} ", spinners[app.animation_tick % spinners.len()])
+    } else {
+        String::new()
+    };
+
+    let title = if app.rag_loading {
+        format!(" RAG{} | Searching... ", spinner)
+    } else {
+        " RAG | Enter search | j/k scroll | Esc close ".to_string()
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_PURPLE))
-        .title(" RAG Query | Enter to search | Esc to close ")
-        .style(Style::default().bg(TOKYO_BG));
+        .border_style(Style::default().fg(AZUL_BLUE))
+        .title(title)
+        .style(Style::default());
 
+    let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),  // Input area
             Constraint::Min(0),     // Results area
         ])
-        .split(panel_area.inner(Margin { horizontal: 1, vertical: 1 }));
+        .split(inner);
 
-    // Input box
-    let input_text = format!("{}_", app.rag_query);
+    // Input box - purple border when loading, blue otherwise
+    let input_border_color = if app.rag_loading { TOKYO_PURPLE } else { AZUL_BLUE };
+    let input_text = if app.rag_loading {
+        format!("{} Searching...", spinner)
+    } else {
+        format!("❯ {}_", app.rag_query)
+    };
     let input = Paragraph::new(input_text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(AZUL_BLUE))
+                .border_style(Style::default().fg(input_border_color))
                 .title(" Query "),
         )
         .style(Style::default().fg(TOKYO_TEXT));
 
     frame.render_widget(input, chunks[0]);
 
-    // Results
-    let status = if app.rag_client.is_none() {
+    // Results with markdown rendering and scrolling
+    let md_renderer = StyledMarkdown::new(chunks[1].width.saturating_sub(4) as usize);
+    let results_height = chunks[1].height.saturating_sub(2) as usize;
+
+    let all_lines: Vec<Line> = if app.rag_client.is_none() {
         vec![Line::from(vec![Span::styled(
-            "RAG service not available. Check home-rag at http://localhost:8000",
-            Style::default().fg(TOKYO_RED),
+            "RAG not available. Start home-rag: cd ~/github/home-rag && python -m src.api",
+            Style::default().fg(TOKYO_ORANGE),
         )])]
+    } else if app.rag_loading {
+        vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                format!("  {}  Searching knowledge base...", spinner),
+                Style::default().fg(TOKYO_PURPLE),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  This may take a few seconds.",
+                Style::default().fg(TOKYO_COMMENT),
+            )]),
+        ]
     } else if app.rag_results.is_empty() {
-        vec![Line::from(vec![Span::styled(
-            "No results yet. Enter a query and press Enter.",
-            Style::default().fg(TOKYO_COMMENT),
-        )])]
+        vec![
+            Line::from(vec![Span::styled(
+                "Enter a query and press Enter to search your knowledge base.",
+                Style::default().fg(TOKYO_COMMENT),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "home-rag uses:",
+                Style::default().fg(TOKYO_PURPLE),
+            )]),
+            Line::from(vec![Span::styled(
+                "  • Neo4j knowledge graph for relationships",
+                Style::default().fg(TOKYO_TEXT),
+            )]),
+            Line::from(vec![Span::styled(
+                "  • Vector embeddings for semantic search",
+                Style::default().fg(TOKYO_TEXT),
+            )]),
+            Line::from(vec![Span::styled(
+                "  • LLM (Ollama/OpenRouter) for answer synthesis",
+                Style::default().fg(TOKYO_TEXT),
+            )]),
+        ]
     } else {
-        let mut lines = vec![Line::from(vec![Span::styled(
-            format!("Found {} results:", app.rag_results.len()),
-            Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD),
-        )])];
-        lines.push(Line::from(""));
-
-        for (i, result) in app.rag_results.iter().enumerate() {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{}. ", i + 1), Style::default().fg(TOKYO_ORANGE)),
-                Span::styled(result, Style::default().fg(TOKYO_TEXT)),
-            ]));
-            lines.push(Line::from(""));
+        // Render results with markdown styling
+        let mut lines: Vec<Line> = Vec::new();
+        for result in &app.rag_results {
+            let result_lines: Vec<String> = result.lines().map(String::from).collect();
+            lines.extend(md_renderer.render(&result_lines));
         }
-
         lines
     };
 
-    let results = Paragraph::new(status)
+    // Calculate scrolling (rag_scroll = 0 means at top, higher = scrolled down)
+    let total_lines = all_lines.len();
+    let max_scroll = total_lines.saturating_sub(results_height);
+    let start_line = app.rag_scroll.min(max_scroll);
+
+    let visible_lines: Vec<Line> = all_lines
+        .into_iter()
+        .skip(start_line)
+        .take(results_height)
+        .collect();
+
+    // Show scroll indicator in title if there's more content
+    let results_title = if total_lines > results_height {
+        let pos = if max_scroll > 0 {
+            (start_line * 100) / max_scroll
+        } else {
+            0
+        };
+        format!(" Results ({}/{}  {}%) ", start_line + 1, total_lines, pos)
+    } else {
+        " Results ".to_string()
+    };
+
+    let results = Paragraph::new(visible_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(TOKYO_BLUE))
-                .title(" Results "),
+                .border_style(Style::default().fg(TOKYO_PURPLE))
+                .title(results_title),
         )
         .style(Style::default().fg(TOKYO_TEXT))
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(results, chunks[1]);
     frame.render_widget(block, panel_area);
@@ -957,9 +1168,9 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_PURPLE))
+        .border_style(Style::default().fg(TOKYO_BLUE))
         .title(" Memory Graph (mem-layer) | r to refresh | Esc to close ")
-        .style(Style::default().bg(TOKYO_BG));
+        .style(Style::default());
 
     let status = if app.memory_client.is_none() {
         vec![Line::from(vec![Span::styled(

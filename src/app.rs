@@ -56,6 +56,8 @@ pub enum AppMessage {
     AiError(String),
     ChatResponse(String),
     ToolAction(ToolAction),
+    RagResponse(Vec<String>),
+    RagError(String),
 }
 
 /// Actions that can be triggered by AI tool calls
@@ -120,6 +122,8 @@ pub struct App {
     pub rag_client: Option<crate::rag::RagClient>,
     pub rag_results: Vec<String>,
     pub rag_query: String,
+    pub rag_scroll: usize,
+    pub rag_loading: bool,
     pub memory_client: Option<crate::memory::MemoryClient>,
     pub memory_nodes: Vec<String>,
 
@@ -172,7 +176,7 @@ impl App {
             view_mode: ViewMode::Rendered,
             format_text: true,
             ai_summary: None,
-            panel_mode: PanelMode::None,
+            panel_mode: PanelMode::None,  // Chat is always visible, not a panel mode
             tabs: TabManager::new(),
             url_input: String::new(),
             mascot: Mascot::new(),
@@ -185,13 +189,15 @@ impl App {
             chat_input: String::new(),
             chat_selected_model: 0,
             chat_scroll: 0,
-            chat_focused: true,
+            chat_focused: false,  // Start in content mode, press 'c' or '3' for chat
             settings_selected: 0,
             settings_model_input: String::new(),
             settings_editing_model: false,
             rag_client,
             rag_results: Vec::new(),
             rag_query: String::new(),
+            rag_scroll: 0,
+            rag_loading: false,
             memory_client,
             memory_nodes: Vec::new(),
             page_rx,
@@ -298,10 +304,16 @@ impl App {
                 AppMessage::AiError(err) => {
                     self.status_message = format!("AI error: {}", err);
                     self.mascot.set_state(MascotState::Error);
+                    // Also show error in chat so it's visible
+                    if let Some(session) = &mut self.chat_session {
+                        session.add_assistant_message(format!("❌ Error: {}", err));
+                        self.chat_scroll = 0;
+                    }
                 }
                 AppMessage::ChatResponse(response) => {
                     if let Some(session) = &mut self.chat_session {
                         session.add_assistant_message(response);
+                        self.chat_scroll = 0; // Auto-scroll to bottom (newest messages)
                         self.mascot.set_state(MascotState::Success);
                         self.status_message = "Response received".to_string();
                     }
@@ -336,6 +348,19 @@ impl App {
                         }
                     }
                 }
+                AppMessage::RagResponse(results) => {
+                    self.rag_loading = false;
+                    self.rag_results = results;
+                    self.rag_scroll = 0;
+                    self.mascot.set_state(MascotState::Success);
+                    self.status_message = format!("RAG: {} results", self.rag_results.len());
+                }
+                AppMessage::RagError(err) => {
+                    self.rag_loading = false;
+                    self.rag_results = vec![format!("Error: {}", err)];
+                    self.mascot.set_state(MascotState::Error);
+                    self.status_message = format!("RAG error: {}", err);
+                }
             }
         }
     }
@@ -359,7 +384,7 @@ impl App {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
-        // Panel-specific handling first
+        // Overlay panel handling first (these take full focus)
         match self.panel_mode {
             PanelMode::Bookmarks => return self.handle_bookmarks_keys(key),
             PanelMode::History => return self.handle_history_keys(key),
@@ -368,11 +393,26 @@ impl App {
                 self.panel_mode = PanelMode::None;
                 return Ok(());
             }
-            PanelMode::Chat => return self.handle_chat_keys(key),
             PanelMode::Settings => return self.handle_settings_keys(key),
             PanelMode::Rag => return self.handle_rag_keys(key),
             PanelMode::Memory => return self.handle_memory_keys(key),
-            PanelMode::None => {}
+            PanelMode::Chat | PanelMode::None => {}  // Chat is always visible, handled below
+        }
+
+        // Chat input handling when chat is focused
+        if self.chat_focused {
+            match (key.code, key.modifiers) {
+                // Esc unfocuses chat
+                (KeyCode::Esc, _) => {
+                    self.chat_focused = false;
+                    self.status_message = "Content mode - 'c' for chat, '/' for URL".to_string();
+                    return Ok(());
+                }
+                // These pass through to global shortcuts
+                (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {}
+                // Handle chat input
+                _ => return self.handle_chat_keys(key),
+            }
         }
 
         // Global shortcuts
@@ -460,9 +500,10 @@ impl App {
                 self.toggle_bookmark();
                 return Ok(());
             }
-            // Chat & Settings
+            // Chat focus (same as '3')
             (KeyCode::Char('c'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
-                self.panel_mode = PanelMode::Chat;
+                self.chat_focused = true;
+                self.status_message = "Chat - type message, Esc to exit".to_string();
                 return Ok(());
             }
             (KeyCode::Char(','), KeyModifiers::NONE) => {
@@ -479,6 +520,24 @@ impl App {
                 self.panel_mode = PanelMode::Memory;
                 self.refresh_memory();
                 self.status_message = "Memory Panel - Viewing mem-layer graph".to_string();
+                return Ok(());
+            }
+            // Number keys for panel focus: 1=Links, 2=Content, 3=Chat
+            (KeyCode::Char('1'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.focus = Focus::Sidebar;
+                self.chat_focused = false;
+                self.status_message = "Links - j/k navigate, Enter follow".to_string();
+                return Ok(());
+            }
+            (KeyCode::Char('2'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.focus = Focus::Content;
+                self.chat_focused = false;
+                self.status_message = "Content - j/k scroll, / search".to_string();
+                return Ok(());
+            }
+            (KeyCode::Char('3'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.chat_focused = true;
+                self.status_message = "Chat - type message, Esc to exit".to_string();
                 return Ok(());
             }
             _ => {}
@@ -995,135 +1054,57 @@ impl App {
 
     fn handle_chat_keys(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            // Esc closes chat
-            KeyCode::Esc => {
-                self.panel_mode = PanelMode::None;
-                self.chat_focused = true; // Reset for next open
-            }
-            // Tab behavior depends on focus
-            KeyCode::Tab => {
-                if self.chat_focused {
-                    // Tab switches from chat to content focus
-                    self.chat_focused = false;
-                    self.status_message = "Content focused (Tab cycles links)".to_string();
-                } else {
-                    // Tab cycles through links in content
-                    if let Some(page) = self.current_page() {
-                        let link_count = page.links.len();
-                        if link_count > 0 {
-                            let selected = self.sidebar_selected();
-                            let next = (selected + 1) % link_count;
-                            self.set_sidebar_selected(next);
-                            if let Some(page) = self.current_page() {
-                                if let Some(link) = page.links.get(next) {
-                                    let name = if link.text.is_empty() { &link.url } else { &link.text };
-                                    self.status_message = format!("Link {}/{}: {}", next + 1, link_count, name);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // Shift+Tab goes back to chat focus
-            KeyCode::BackTab => {
-                self.chat_focused = true;
-                self.status_message = "Chat focused".to_string();
-            }
-            // Chat scrolling with PageUp/PageDown (always available)
-            // chat_scroll = 0 shows newest, higher = scrolled back to older
             KeyCode::PageUp => {
-                self.chat_scroll += 5; // Scroll back to see older messages
+                self.chat_scroll += 5;
             }
             KeyCode::PageDown => {
-                self.chat_scroll = self.chat_scroll.saturating_sub(5); // Scroll forward to newer
+                self.chat_scroll = self.chat_scroll.saturating_sub(5);
             }
-            // Arrow keys scroll chat when chat is focused
-            KeyCode::Up if self.chat_focused => {
-                self.chat_scroll += 1; // Scroll back to see older messages
+            KeyCode::Up => {
+                self.chat_scroll += 1;
             }
-            KeyCode::Down if self.chat_focused => {
-                self.chat_scroll = self.chat_scroll.saturating_sub(1); // Scroll forward to newer
+            KeyCode::Down => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(1);
             }
-            _ if self.chat_focused => {
-                // Only handle input when chat is focused
-                match key.code {
-                    KeyCode::Char(c) => {
-                        self.chat_input.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        self.chat_input.pop();
-                    }
-                    KeyCode::Enter => {
-                        if !self.chat_input.is_empty() {
-                            let message = self.chat_input.clone();
-                            self.chat_input.clear();
+            KeyCode::Char(c) => {
+                self.chat_input.push(c);
+            }
+            KeyCode::Backspace => {
+                self.chat_input.pop();
+            }
+            KeyCode::Enter => {
+                if !self.chat_input.is_empty() {
+                    let message = self.chat_input.clone();
+                    self.chat_input.clear();
+                    self.chat_scroll = 0;
 
-                            let context = self.get_browser_context();
+                    let context = self.get_browser_context();
 
-                            if let Some(session) = &mut self.chat_session {
-                                session.add_user_message(format!("{}\n\n{}", context, message));
+                    if let Some(session) = &mut self.chat_session {
+                        session.add_user_message(format!("{}\n\n{}", context, message));
 
-                                let api_key = self.config.get_api_key().unwrap_or("").to_string();
-                                let base_url = self.config.get_ai_base_url()
-                                    .unwrap_or("https://openrouter.ai/api/v1")
-                                    .to_string();
-                                let models = session.available_models.clone();
-                                let messages = session.messages.clone();
-                                let tx = self.page_tx.clone();
+                        let api_key = self.config.get_api_key().unwrap_or("").to_string();
+                        let base_url = self.config.get_ai_base_url()
+                            .unwrap_or("https://openrouter.ai/api/v1")
+                            .to_string();
+                        let models = session.available_models.clone();
+                        let messages = session.messages.clone();
+                        let tx = self.page_tx.clone();
 
-                                self.mascot.set_state(crate::mascot::MascotState::Loading);
-                                self.status_message = "Thinking...".to_string();
+                        self.mascot.set_state(crate::mascot::MascotState::Loading);
+                        self.status_message = "Thinking...".to_string();
 
-                                std::thread::spawn(move || {
-                                    match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages, &tx) {
-                                        Ok(response) => {
-                                            let _ = tx.send(AppMessage::ChatResponse(response));
-                                        }
-                                        Err(e) => {
-                                            let _ = tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
-                                        }
-                                    }
-                                });
+                        std::thread::spawn(move || {
+                            match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages, &tx) {
+                                Ok(response) => {
+                                    let _ = tx.send(AppMessage::ChatResponse(response));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
+                                }
                             }
-                        }
+                        });
                     }
-                    _ => {}
-                }
-            }
-            _ if !self.chat_focused => {
-                // Content navigation when not focused on chat
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if let Some(tab) = self.tabs.active_tab_mut() {
-                            tab.scroll_offset = tab.scroll_offset.saturating_sub(1);
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if let Some(tab) = self.tabs.active_tab_mut() {
-                            tab.scroll_offset += 1;
-                        }
-                    }
-                    KeyCode::Char('g') => {
-                        if let Some(tab) = self.tabs.active_tab_mut() {
-                            tab.scroll_offset = 0;
-                        }
-                    }
-                    KeyCode::Char('G') => {
-                        if let Some(tab) = self.tabs.active_tab_mut() {
-                            tab.scroll_offset = usize::MAX / 2; // Will be clamped during render
-                        }
-                    }
-                    KeyCode::Enter => {
-                        // Follow the selected link
-                        if let Some(page) = self.current_page() {
-                            let selected = self.sidebar_selected();
-                            if let Some(link) = page.links.get(selected) {
-                                self.url_input = link.url.clone();
-                                self.navigate();
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             }
             _ => {}
@@ -1144,34 +1125,77 @@ impl App {
 
     fn handle_rag_keys(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+            KeyCode::Esc => {
                 self.panel_mode = PanelMode::None;
             }
-            KeyCode::Char(c) if c != 'r' && c != 'q' => {
+            // Scrolling results with j/k or arrows (scroll = 0 is top)
+            KeyCode::Up | KeyCode::Char('k') if !self.rag_results.is_empty() => {
+                self.rag_scroll = self.rag_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if !self.rag_results.is_empty() => {
+                self.rag_scroll = self.rag_scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                self.rag_scroll = self.rag_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.rag_scroll = self.rag_scroll.saturating_add(10);
+            }
+            KeyCode::Char('g') if !self.rag_results.is_empty() => {
+                self.rag_scroll = 0; // Top
+            }
+            KeyCode::Char('G') if !self.rag_results.is_empty() => {
+                self.rag_scroll = usize::MAX; // Bottom (will be clamped in render)
+            }
+            KeyCode::Char(c) => {
                 self.rag_query.push(c);
             }
             KeyCode::Backspace => {
                 self.rag_query.pop();
             }
             KeyCode::Enter => {
-                if !self.rag_query.is_empty() && self.rag_client.is_some() {
+                if !self.rag_query.is_empty() && self.rag_client.is_some() && !self.rag_loading {
                     let query = self.rag_query.clone();
-                    self.status_message = format!("Querying RAG: {}", query);
+                    self.status_message = format!("Querying RAG: {}...", query);
+                    self.rag_loading = true;
+                    self.rag_results.clear();
+                    self.mascot.set_state(MascotState::Loading);
 
-                    if let Some(rag) = &self.rag_client {
-                        match rag.query(&query, Some(5)) {
-                            Ok(response) => {
-                                self.rag_results = response.sources
-                                    .iter()
-                                    .map(|s| format!("[{:.2}] {}", s.score, s.content))
-                                    .collect();
-                                self.status_message = format!("Found {} results", self.rag_results.len());
+                    // Clone what we need for the thread
+                    let tx = self.page_tx.clone();
+                    let rag_url = self.config.rag_base_url.clone().unwrap_or_else(|| "http://localhost:8100".to_string());
+
+                    std::thread::spawn(move || {
+                        // Create a new client in the thread
+                        match crate::rag::RagClient::new(rag_url) {
+                            Ok(rag) => {
+                                match rag.query(&query, Some(5)) {
+                                    Ok(response) => {
+                                        let mut results = vec![
+                                            format!("## Answer\n\n{}", response.answer),
+                                            String::new(),
+                                            "---".to_string(),
+                                            String::new(),
+                                            format!("## Sources ({})", response.sources.len()),
+                                        ];
+                                        for (i, s) in response.sources.iter().enumerate() {
+                                            let content = s.text.as_ref().unwrap_or(&s.content);
+                                            let score = s.similarity.unwrap_or(s.score);
+                                            results.push(format!("\n**[{}]** score: {:.2}", i + 1, score));
+                                            results.push(content.clone());
+                                        }
+                                        let _ = tx.send(AppMessage::RagResponse(results));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(AppMessage::RagError(e.to_string()));
+                                    }
+                                }
                             }
                             Err(e) => {
-                                self.status_message = format!("RAG error: {}", e);
+                                let _ = tx.send(AppMessage::RagError(format!("Failed to connect: {}", e)));
                             }
                         }
-                    }
+                    });
                 }
             }
             _ => {}
@@ -1324,6 +1348,27 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
+                name: "brave_search".to_string(),
+                description: "Search the web using Brave Search API. Use this to find current information, news, or answer questions that require up-to-date web data.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query"
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": "Number of results to return (default 5, max 20)"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
                 name: "navigate".to_string(),
                 description: "Navigate to a URL or search query".to_string(),
                 parameters: serde_json::json!({
@@ -1402,6 +1447,60 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
             },
         },
     ]
+}
+
+/// Execute Brave Search API call
+fn brave_search(query: &str, count: usize) -> Result<String> {
+    let api_key = std::env::var("BRAVE_API_KEY")
+        .unwrap_or_default();
+
+    if api_key.is_empty() {
+        return Ok("Error: BRAVE_API_KEY not set".to_string());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let count = count.min(20).max(1);
+    let url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+        urlencoding::encode(query),
+        count
+    );
+
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", &api_key)
+        .send()?;
+
+    if !response.status().is_success() {
+        return Ok(format!("Search failed: {}", response.status()));
+    }
+
+    let json: serde_json::Value = response.json()?;
+
+    // Extract web results
+    let mut results = Vec::new();
+    if let Some(web) = json.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
+        for (i, result) in web.iter().take(count).enumerate() {
+            let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+            let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let description = result.get("description").and_then(|d| d.as_str()).unwrap_or("No description");
+
+            results.push(format!(
+                "{}. **{}**\n   {}\n   {}\n",
+                i + 1, title, url, description
+            ));
+        }
+    }
+
+    if results.is_empty() {
+        Ok("No results found".to_string())
+    } else {
+        Ok(format!("## Search Results for: {}\n\n{}", query, results.join("\n")))
+    }
 }
 
 /// Response from chat API - can be content or tool calls
@@ -1489,6 +1588,17 @@ fn execute_tool_call(
         .unwrap_or(serde_json::json!({}));
 
     match tool_call.function.name.as_str() {
+        "brave_search" => {
+            if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
+                let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
+                match brave_search(query, count) {
+                    Ok(results) => results,
+                    Err(e) => format!("Search error: {}", e),
+                }
+            } else {
+                "Error: Missing 'query' parameter".to_string()
+            }
+        }
         "navigate" => {
             if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
                 let _ = tx.send(AppMessage::ToolAction(ToolAction::Navigate(url.to_string())));
@@ -1578,8 +1688,9 @@ fn send_chat_message(
     // Try with tools first, then without if it fails
     let response = match send_chat_message_with_tools(api_key, model, base_url, &api_messages, true) {
         Ok(resp) => resp,
-        Err(_) => {
-            // Retry without tools (for models that don't support them)
+        Err(e) => {
+            // Log the tool error and retry without tools
+            eprintln!("Tools not supported ({}), retrying without tools...", e);
             send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)?
         }
     };
@@ -1587,6 +1698,11 @@ fn send_chat_message(
     match response {
         ChatApiResponse::Content(content) => Ok(content),
         ChatApiResponse::ToolCalls(tool_calls) => {
+            // Build a summary of tool calls for display
+            let tool_summary: Vec<String> = tool_calls.iter()
+                .map(|tc| format!("⚙ {}", tc.function.name))
+                .collect();
+
             // Execute tool calls and send results back
             let assistant_msg = OpenAIChatMessage {
                 role: "assistant".to_string(),
@@ -1597,8 +1713,10 @@ fn send_chat_message(
             api_messages.push(assistant_msg);
 
             // Execute each tool and add results
+            let mut tool_results: Vec<String> = Vec::new();
             for tool_call in &tool_calls {
                 let result = execute_tool_call(tool_call, &context, tx);
+                tool_results.push(format!("  ↳ {}", result));
                 api_messages.push(OpenAIChatMessage {
                     role: "tool".to_string(),
                     content: Some(result),
@@ -1608,13 +1726,23 @@ fn send_chat_message(
             }
 
             // Continue conversation without tools to get final response
-            match send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)? {
-                ChatApiResponse::Content(content) => Ok(content),
-                ChatApiResponse::ToolCalls(_) => {
-                    // If we still get tool calls, just return a summary
-                    Ok("Tool calls processed. Check the browser for results.".to_string())
-                }
+            let final_content = match send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)? {
+                ChatApiResponse::Content(content) => content,
+                ChatApiResponse::ToolCalls(_) => String::new(),
+            };
+
+            // Combine tool summary with final response
+            let mut full_response = tool_summary.join("\n");
+            if !tool_results.is_empty() {
+                full_response.push_str("\n");
+                full_response.push_str(&tool_results.join("\n"));
             }
+            if !final_content.is_empty() {
+                full_response.push_str("\n\n");
+                full_response.push_str(&final_content);
+            }
+
+            Ok(full_response)
         }
     }
 }

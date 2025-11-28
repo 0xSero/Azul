@@ -21,13 +21,53 @@ pub struct Tab {
 }
 
 impl Tab {
-    /// Create a new tab
+    /// Create a new tab with welcome content
     pub fn new(id: usize) -> Self {
+        use crate::browser::page::Link;
+
+        // Create a welcome page with suggested links
+        let welcome_page = Page {
+            url: "azul://home".to_string(),
+            title: "Welcome to Azul".to_string(),
+            content_lines: vec![
+                "# Welcome to Azul".to_string(),
+                "".to_string(),
+                "**Terminal Web Browser**".to_string(),
+                "".to_string(),
+                "---".to_string(),
+                "".to_string(),
+                "## Getting Started".to_string(),
+                "".to_string(),
+                "- Press `/` to search or enter a URL".to_string(),
+                "- Press `?` for help".to_string(),
+                "- Press `1` for links, `2` for content, `3` for chat".to_string(),
+                "".to_string(),
+                "## Quick Links".to_string(),
+                "".to_string(),
+                "Browse the **Links** panel on the left to visit suggested sites.".to_string(),
+                "".to_string(),
+                "## AI Assistant".to_string(),
+                "".to_string(),
+                "Chat with the AI (press `c` or `3`) - it can search the web, summarize pages, and help you navigate.".to_string(),
+                "".to_string(),
+            ],
+            raw_content: "Welcome to Azul Browser".to_string(),
+            links: vec![
+                Link { text: "Ethers Blog".to_string(), url: "https://blog.ethers.club".to_string() },
+                Link { text: "Hacker News".to_string(), url: "https://news.ycombinator.com".to_string() },
+                Link { text: "Wikipedia".to_string(), url: "https://en.wikipedia.org".to_string() },
+                Link { text: "arXiv".to_string(), url: "https://arxiv.org".to_string() },
+                Link { text: "GitHub".to_string(), url: "https://github.com".to_string() },
+                Link { text: "Lobsters".to_string(), url: "https://lobste.rs".to_string() },
+                Link { text: "DuckDuckGo".to_string(), url: "https://duckduckgo.com".to_string() },
+            ],
+        };
+
         Self {
             id,
-            url: String::new(),
-            title: "New Tab".to_string(),
-            page: None,
+            url: "azul://home".to_string(),
+            title: "Welcome to Azul".to_string(),
+            page: Some(welcome_page),
             loading: false,
             error: None,
             scroll_offset: 0,

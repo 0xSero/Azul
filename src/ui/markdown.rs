@@ -9,7 +9,11 @@ use ratatui::{
 };
 use regex::Regex;
 
-use super::{AZUL_BLUE, TOKYO_BLUE, TOKYO_COMMENT, TOKYO_GREEN, TOKYO_ORANGE, TOKYO_PURPLE, TOKYO_RED, TOKYO_TEXT};
+use super::{AZUL_BLUE, TOKYO_BLUE, TOKYO_COMMENT, TOKYO_GREEN, TOKYO_ORANGE, TOKYO_PURPLE, TOKYO_TEXT};
+
+// Additional accent colors for better visual hierarchy
+const HEADER_ACCENT: Color = Color::Rgb(255, 121, 198);  // Pink
+const LINK_COLOR: Color = Color::Rgb(139, 233, 253);     // Cyan
 
 /// Represents a parsed markdown element
 #[derive(Debug, Clone)]
@@ -84,15 +88,18 @@ impl StyledMarkdown {
             return vec![Line::from("")];
         }
 
-        // Headers
+        // Headers (check longest prefix first)
+        if trimmed.starts_with("#### ") {
+            return vec![self.render_header4(&trimmed[5..])];
+        }
         if trimmed.starts_with("### ") {
             return vec![self.render_header3(&trimmed[4..])];
         }
         if trimmed.starts_with("## ") {
-            return vec![self.render_header2(&trimmed[3..])];
+            return vec![Line::from(""), self.render_header2(&trimmed[3..])];
         }
         if trimmed.starts_with("# ") {
-            return vec![self.render_header1(&trimmed[2..])];
+            return vec![Line::from(""), self.render_header1(&trimmed[2..]), Line::from("")];
         }
 
         // Horizontal rule
@@ -105,39 +112,56 @@ impl StyledMarkdown {
             return vec![self.render_quote(&trimmed[2..])];
         }
 
+        // Nested list items (indented with spaces/tabs)
+        let indent = line.len() - line.trim_start().len();
+        let indent_level = indent / 2;  // 2 spaces per level
+
         // List items
         if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-            return vec![self.render_list_item(&trimmed[2..])];
+            return vec![self.render_list_item(&trimmed[2..], indent_level)];
         }
 
         // Numbered list
         if let Some(captures) = Regex::new(r"^(\d+)\.\s+(.*)$").ok().and_then(|re| re.captures(trimmed)) {
             if let (Some(num), Some(text)) = (captures.get(1), captures.get(2)) {
-                return vec![self.render_numbered_item(num.as_str(), text.as_str())];
+                return vec![self.render_numbered_item(num.as_str(), text.as_str(), indent_level)];
             }
+        }
+
+        // Task list items: - [ ] or - [x]
+        if trimmed.starts_with("- [ ] ") {
+            return vec![self.render_task_item(&trimmed[6..], false, indent_level)];
+        }
+        if trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
+            return vec![self.render_task_item(&trimmed[6..], true, indent_level)];
         }
 
         // Regular paragraph with inline formatting
         vec![self.render_paragraph(line)]
     }
 
-    /// Render H1 header
+    /// Render H1 header - large, prominent
     fn render_header1(&self, text: &str) -> Line<'static> {
         Line::from(vec![
-            Span::styled("█ ", Style::default().fg(AZUL_BLUE)),
+            Span::styled("━━ ", Style::default().fg(HEADER_ACCENT)),
             Span::styled(
-                text.to_string(),
+                text.to_uppercase(),
                 Style::default()
-                    .fg(AZUL_BLUE)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                    .fg(HEADER_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                "━".repeat((self.width.saturating_sub(text.len() + 5)).min(40)),
+                Style::default().fg(HEADER_ACCENT),
             ),
         ])
     }
 
-    /// Render H2 header
+    /// Render H2 header - section headers
     fn render_header2(&self, text: &str) -> Line<'static> {
         Line::from(vec![
-            Span::styled("▌ ", Style::default().fg(TOKYO_PURPLE)),
+            Span::styled("◆ ", Style::default().fg(TOKYO_PURPLE)),
             Span::styled(
                 text.to_string(),
                 Style::default()
@@ -147,14 +171,27 @@ impl StyledMarkdown {
         ])
     }
 
-    /// Render H3 header
+    /// Render H3 header - subsection
     fn render_header3(&self, text: &str) -> Line<'static> {
         Line::from(vec![
-            Span::styled("▸ ", Style::default().fg(TOKYO_ORANGE)),
+            Span::styled("  ▸ ", Style::default().fg(TOKYO_ORANGE)),
             Span::styled(
                 text.to_string(),
                 Style::default()
                     .fg(TOKYO_ORANGE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    }
+
+    /// Render H4 header - smaller subsection
+    fn render_header4(&self, text: &str) -> Line<'static> {
+        Line::from(vec![
+            Span::styled("    ◦ ", Style::default().fg(TOKYO_COMMENT)),
+            Span::styled(
+                text.to_string(),
+                Style::default()
+                    .fg(TOKYO_TEXT)
                     .add_modifier(Modifier::BOLD),
             ),
         ])
@@ -182,25 +219,61 @@ impl StyledMarkdown {
         ])
     }
 
-    /// Render list item
-    fn render_list_item(&self, text: &str) -> Line<'static> {
-        Line::from(vec![
-            Span::styled("  • ", Style::default().fg(TOKYO_GREEN)),
-            Span::styled(
-                self.render_inline_formatting(text),
-                Style::default().fg(TOKYO_TEXT),
-            ),
-        ])
+    /// Render list item with indentation support
+    fn render_list_item(&self, text: &str, indent_level: usize) -> Line<'static> {
+        let indent = "  ".repeat(indent_level);
+        let bullet = match indent_level {
+            0 => "•",
+            1 => "◦",
+            2 => "▪",
+            _ => "·",
+        };
+        let bullet_color = match indent_level {
+            0 => TOKYO_GREEN,
+            1 => TOKYO_BLUE,
+            _ => TOKYO_COMMENT,
+        };
+
+        let mut spans = vec![
+            Span::styled(format!("{}  {} ", indent, bullet), Style::default().fg(bullet_color)),
+        ];
+        spans.extend(self.render_inline_spans(text));
+        Line::from(spans)
     }
 
-    /// Render numbered list item
-    fn render_numbered_item(&self, num: &str, text: &str) -> Line<'static> {
+    /// Render numbered list item with indentation
+    fn render_numbered_item(&self, num: &str, text: &str, indent_level: usize) -> Line<'static> {
+        let indent = "  ".repeat(indent_level);
+        let num_color = match indent_level {
+            0 => TOKYO_ORANGE,
+            _ => TOKYO_COMMENT,
+        };
+
+        let mut spans = vec![
+            Span::styled(format!("{} {}. ", indent, num), Style::default().fg(num_color)),
+        ];
+        spans.extend(self.render_inline_spans(text));
+        Line::from(spans)
+    }
+
+    /// Render task list item (checkbox)
+    fn render_task_item(&self, text: &str, checked: bool, indent_level: usize) -> Line<'static> {
+        let indent = "  ".repeat(indent_level);
+        let (checkbox, style) = if checked {
+            ("☑", Style::default().fg(TOKYO_GREEN))
+        } else {
+            ("☐", Style::default().fg(TOKYO_COMMENT))
+        };
+
+        let text_style = if checked {
+            Style::default().fg(TOKYO_COMMENT).add_modifier(Modifier::CROSSED_OUT)
+        } else {
+            Style::default().fg(TOKYO_TEXT)
+        };
+
         Line::from(vec![
-            Span::styled(format!(" {}. ", num), Style::default().fg(TOKYO_ORANGE)),
-            Span::styled(
-                self.render_inline_formatting(text),
-                Style::default().fg(TOKYO_TEXT),
-            ),
+            Span::styled(format!("{}  {} ", indent, checkbox), style),
+            Span::styled(text.to_string(), text_style),
         ])
     }
 
@@ -218,7 +291,7 @@ impl StyledMarkdown {
                 Span::styled("│ ", Style::default().fg(TOKYO_COMMENT)),
                 Span::styled(
                     line.clone(),
-                    Style::default().fg(TOKYO_GREEN).bg(Color::Rgb(30, 32, 48)),
+                    Style::default().fg(TOKYO_GREEN),
                 ),
             ]));
         }
@@ -323,9 +396,9 @@ impl StyledMarkdown {
                             url.push(uc);
                         }
                         spans.push(Span::styled(
-                            format!("🔗 {}", link_text),
+                            format!("⌁ {}", link_text),
                             Style::default()
-                                .fg(TOKYO_BLUE)
+                                .fg(LINK_COLOR)
                                 .add_modifier(Modifier::UNDERLINED),
                         ));
                     } else {
@@ -357,6 +430,63 @@ impl StyledMarkdown {
         // For list items, just strip the markdown syntax and return plain text
         // The actual styling is handled in render_paragraph
         text.to_string()
+    }
+
+    /// Render inline formatting and return spans (for list items etc)
+    fn render_inline_spans(&self, text: &str) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+        let mut current = String::new();
+        let mut chars = text.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c {
+                // Bold: **text**
+                '*' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    if !current.is_empty() {
+                        spans.push(Span::styled(current.clone(), Style::default().fg(TOKYO_TEXT)));
+                        current.clear();
+                    }
+                    let mut bold_text = String::new();
+                    while let Some(bc) = chars.next() {
+                        if bc == '*' && chars.peek() == Some(&'*') {
+                            chars.next();
+                            break;
+                        }
+                        bold_text.push(bc);
+                    }
+                    spans.push(Span::styled(
+                        bold_text,
+                        Style::default().fg(TOKYO_TEXT).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                // Inline code: `code`
+                '`' => {
+                    if !current.is_empty() {
+                        spans.push(Span::styled(current.clone(), Style::default().fg(TOKYO_TEXT)));
+                        current.clear();
+                    }
+                    let mut code_text = String::new();
+                    while let Some(cc) = chars.next() {
+                        if cc == '`' {
+                            break;
+                        }
+                        code_text.push(cc);
+                    }
+                    spans.push(Span::styled(
+                        format!(" {} ", code_text),
+                        Style::default().fg(TOKYO_GREEN).bg(Color::Rgb(30, 32, 48)),
+                    ));
+                }
+                _ => current.push(c),
+            }
+        }
+
+        if !current.is_empty() {
+            spans.push(Span::styled(current, Style::default().fg(TOKYO_TEXT)));
+        }
+
+        spans
     }
 }
 

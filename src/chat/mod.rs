@@ -92,6 +92,17 @@ impl ChatSession {
 
         // Add system message with browser tools
         session.add_system_message();
+
+        // Add welcome message from assistant
+        session.messages.push(ChatMessage::new_assistant(
+            "Hey! I'm your browsing assistant. I can help you:\n\n\
+             • Search the web (I have Brave Search!)\n\
+             • Summarize pages you're reading\n\
+             • Find links and navigate\n\
+             • Answer questions about content\n\n\
+             What would you like to explore today?".to_string()
+        ));
+
         session
     }
 

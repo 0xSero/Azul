@@ -29,7 +29,7 @@ cd azul-browse-rust
 cargo build --release
 
 # Run
-./target/release/azul-browse
+./target/release/azul
 
 # Or install to PATH
 cargo install --path .
@@ -39,19 +39,19 @@ cargo install --path .
 
 ```bash
 # Start TUI browser
-azul-browse
+azul
 
 # Search DuckDuckGo
-azul-browse -q "rust programming"
+azul -q "rust programming"
 
 # Search Wikipedia
-azul-browse -q "w:Rust language"
+azul -q "w:Rust language"
 
 # Fetch a URL directly
-azul-browse -q "https://example.com"
+azul -q "https://example.com"
 
 # Fetch with JavaScript rendering
-azul-browse --js -q "https://example.com"
+azul --js -q "https://example.com"
 ```
 
 ## Configuration

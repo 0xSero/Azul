@@ -1,0 +1,1 @@
+- remember to always build azul and deploy locally as azul for global access
