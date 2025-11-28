@@ -240,7 +240,8 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
             format!(" {} ", mode_label.to_uppercase())
         } else {
             format!(" {} ", mode_label)
-        });
+        })
+        .style(Style::default().bg(TOKYO_BG));
 
     if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
@@ -684,26 +685,37 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
     out
 }
 
-/// Side panel chat - integrates with main content area
+// Cosmic dark theme for chat panel - deep space with subtle purple glow
+const COSMIC_BG: Color = Color::Rgb(13, 13, 23);           // Deep space black
+const COSMIC_BORDER: Color = Color::Rgb(88, 66, 139);      // Cosmic purple
+const COSMIC_ACCENT: Color = Color::Rgb(138, 99, 210);     // Nebula violet
+const COSMIC_TEXT_DIM: Color = Color::Rgb(140, 140, 170);  // Starlight dim
+const COSMIC_GLOW: Color = Color::Rgb(100, 149, 237);      // Cornflower blue glow
+
+/// Side panel chat - integrates with main content area (cosmic dark theme)
 fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
     // Clear the area first to avoid artifacts
     frame.render_widget(Clear, area);
 
-    let border_color = if app.chat_focused { AZUL_BLUE } else { TOKYO_BLUE };
+    // Cosmic themed border colors
+    let border_color = if app.chat_focused { COSMIC_GLOW } else { COSMIC_BORDER };
     let title = if app.chat_focused { " CHAT " } else { " chat " };
 
+    // Create block first and render it to establish cosmic background
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(title)
-        .style(Style::default().bg(TOKYO_BG));
+        .title(Span::styled(title, Style::default().fg(COSMIC_ACCENT)))
+        .style(Style::default().bg(COSMIC_BG));
+
+    // Render block first to fill background
+    frame.render_widget(block.clone(), area);
 
     if app.chat_session.is_none() {
         let empty = Paragraph::new("Configure AI in settings")
-            .block(block)
-            .style(Style::default().fg(TOKYO_COMMENT))
+            .style(Style::default().fg(COSMIC_TEXT_DIM).bg(COSMIC_BG))
             .alignment(Alignment::Center);
-        frame.render_widget(empty, area);
+        frame.render_widget(empty, area.inner(Margin { horizontal: 1, vertical: 1 }));
         return;
     }
 
@@ -733,15 +745,16 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
             match msg.role {
                 crate::chat::Role::System => continue,
                 crate::chat::Role::User => {
-                    // User message - simple styled prefix
+                    // User message - cosmic accent prefix
                     all_lines.push(Line::from(vec![
-                        Span::styled("▸ ", Style::default().fg(TOKYO_GREEN)),
+                        Span::styled("▸ ", Style::default().fg(COSMIC_GLOW)),
                         Span::styled(&msg.content, Style::default().fg(TOKYO_TEXT)),
                     ]));
                     all_lines.push(Line::from(""));
                 }
                 crate::chat::Role::Assistant => {
-                    // AI message - render as markdown
+                    // AI message - render as markdown with cosmic prefix
+                    all_lines.push(Line::from(Span::styled("◆ ", Style::default().fg(COSMIC_ACCENT))));
                     let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
                     let styled = md_renderer.render(&content_lines);
                     all_lines.extend(styled);
@@ -752,36 +765,38 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
         }
 
         // Calculate visible area with scrolling
+        // chat_scroll represents "lines scrolled back from bottom"
+        // 0 = showing newest messages, higher = scrolled back to see older
         let visible_height = chunks[0].height as usize;
         let total_lines = all_lines.len();
         let max_scroll = total_lines.saturating_sub(visible_height);
-        let scroll = (app.chat_scroll as usize).min(max_scroll);
+        let scroll_back = (app.chat_scroll as usize).min(max_scroll);
+        let scroll_from_top = max_scroll.saturating_sub(scroll_back);
 
         let visible: Vec<Line> = all_lines
             .into_iter()
-            .skip(scroll)
+            .skip(scroll_from_top)
             .take(visible_height)
             .collect();
 
         let msg_para = Paragraph::new(visible)
-            .style(Style::default().fg(TOKYO_TEXT))
+            .style(Style::default().fg(TOKYO_TEXT).bg(COSMIC_BG))
             .wrap(Wrap { trim: false });
         frame.render_widget(msg_para, chunks[0]);
     }
 
-    // Input area with cursor
+    // Input area with cosmic styling
     let input_block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(TOKYO_COMMENT));
+        .border_style(Style::default().fg(COSMIC_BORDER))
+        .style(Style::default().bg(COSMIC_BG));
 
     let input_text = format!("❯ {}_", app.chat_input);
     let input = Paragraph::new(input_text)
         .block(input_block)
-        .style(Style::default().fg(TOKYO_TEXT))
+        .style(Style::default().fg(COSMIC_GLOW).bg(COSMIC_BG))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, chunks[1]);
-
-    frame.render_widget(block, area);
 }
 
 // Keep old function for compatibility (unused but prevents compile errors)

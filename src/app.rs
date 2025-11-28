@@ -55,6 +55,15 @@ pub enum AppMessage {
     AiSummary(String),
     AiError(String),
     ChatResponse(String),
+    ToolAction(ToolAction),
+}
+
+/// Actions that can be triggered by AI tool calls
+#[derive(Debug, Clone)]
+pub enum ToolAction {
+    Navigate(String),
+    FollowLink(usize),
+    Scroll { direction: String, amount: usize },
 }
 
 /// Panel mode for overlays
@@ -295,6 +304,36 @@ impl App {
                         session.add_assistant_message(response);
                         self.mascot.set_state(MascotState::Success);
                         self.status_message = "Response received".to_string();
+                    }
+                }
+                AppMessage::ToolAction(action) => {
+                    match action {
+                        ToolAction::Navigate(url) => {
+                            self.url_input = url;
+                            self.navigate();
+                            self.status_message = "AI navigated to URL".to_string();
+                        }
+                        ToolAction::FollowLink(idx) => {
+                            if let Some(page) = self.current_page() {
+                                if let Some(link) = page.links.get(idx) {
+                                    self.url_input = link.url.clone();
+                                    self.navigate();
+                                    self.status_message = format!("AI followed link {}", idx + 1);
+                                }
+                            }
+                        }
+                        ToolAction::Scroll { direction, amount } => {
+                            if let Some(tab) = self.tabs.active_tab_mut() {
+                                match direction.as_str() {
+                                    "up" => tab.scroll_offset = tab.scroll_offset.saturating_sub(amount),
+                                    "down" => tab.scroll_offset += amount,
+                                    "top" => tab.scroll_offset = 0,
+                                    "bottom" => tab.scroll_offset = usize::MAX / 2,
+                                    _ => {}
+                                }
+                                self.status_message = format!("AI scrolled {}", direction);
+                            }
+                        }
                     }
                 }
             }
@@ -964,18 +1003,19 @@ impl App {
                 self.status_message = "Chat focused".to_string();
             }
             // Chat scrolling with PageUp/PageDown (always available)
+            // chat_scroll = 0 shows newest, higher = scrolled back to older
             KeyCode::PageUp => {
-                self.chat_scroll = self.chat_scroll.saturating_sub(5);
+                self.chat_scroll += 5; // Scroll back to see older messages
             }
             KeyCode::PageDown => {
-                self.chat_scroll += 5;
+                self.chat_scroll = self.chat_scroll.saturating_sub(5); // Scroll forward to newer
             }
             // Arrow keys scroll chat when chat is focused
             KeyCode::Up if self.chat_focused => {
-                self.chat_scroll = self.chat_scroll.saturating_sub(1);
+                self.chat_scroll += 1; // Scroll back to see older messages
             }
             KeyCode::Down if self.chat_focused => {
-                self.chat_scroll += 1;
+                self.chat_scroll = self.chat_scroll.saturating_sub(1); // Scroll forward to newer
             }
             _ if self.chat_focused => {
                 // Only handle input when chat is focused
@@ -1008,7 +1048,7 @@ impl App {
                                 self.status_message = "Thinking...".to_string();
 
                                 std::thread::spawn(move || {
-                                    match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages) {
+                                    match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages, &tx) {
                                         Ok(response) => {
                                             let _ = tx.send(AppMessage::ChatResponse(response));
                                         }
@@ -1179,7 +1219,7 @@ impl App {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Chat API Integration
+// Chat API Integration with Tool Calling
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[derive(Serialize)]
@@ -1188,12 +1228,47 @@ struct OpenAIChatRequest {
     messages: Vec<OpenAIChatMessage>,
     max_tokens: u32,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDefinition>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct OpenAIChatMessage {
     role: String,
-    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: String,
+    function: FunctionCall,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct FunctionCall {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Serialize, Clone)]
+struct ToolDefinition {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: FunctionDefinition,
+}
+
+#[derive(Serialize, Clone)]
+struct FunctionDefinition {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -1205,6 +1280,7 @@ struct OpenAIChatResponse {
 #[derive(Deserialize)]
 struct OpenAIChatChoice {
     message: OpenAIChatMessage,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1215,30 +1291,121 @@ struct OpenAIError {
     code: Option<String>,
 }
 
-fn send_chat_message(api_key: &str, model: &str, base_url: &str, messages: &[ChatMessage]) -> Result<String> {
+/// Get browser tool definitions
+fn get_browser_tools() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "navigate".to_string(),
+                description: "Navigate to a URL or search query".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL to navigate to or search query"
+                        }
+                    },
+                    "required": ["url"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "follow_link".to_string(),
+                description: "Follow a link by its number (1-indexed)".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "link_number": {
+                            "type": "integer",
+                            "description": "Link number to follow (starting from 1)"
+                        }
+                    },
+                    "required": ["link_number"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "scroll".to_string(),
+                description: "Scroll the page content".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "direction": {
+                            "type": "string",
+                            "enum": ["up", "down", "top", "bottom"],
+                            "description": "Direction to scroll"
+                        },
+                        "amount": {
+                            "type": "integer",
+                            "description": "Number of lines to scroll (default 5)"
+                        }
+                    },
+                    "required": ["direction"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "get_page_content".to_string(),
+                description: "Get the full content of the current page".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "list_links".to_string(),
+                description: "List all links on the current page".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+        },
+    ]
+}
+
+/// Response from chat API - can be content or tool calls
+enum ChatApiResponse {
+    Content(String),
+    ToolCalls(Vec<ToolCall>),
+}
+
+fn send_chat_message_with_tools(
+    api_key: &str,
+    model: &str,
+    base_url: &str,
+    messages: &[OpenAIChatMessage],
+    include_tools: bool,
+) -> Result<ChatApiResponse> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()?;
 
-    // Convert our messages to OpenAI format
-    let api_messages: Vec<OpenAIChatMessage> = messages
-        .iter()
-        .map(|m| OpenAIChatMessage {
-            role: match m.role {
-                crate::chat::Role::System => "system".to_string(),
-                crate::chat::Role::User => "user".to_string(),
-                crate::chat::Role::Assistant => "assistant".to_string(),
-                crate::chat::Role::Tool => "tool".to_string(),
-            },
-            content: m.content.clone(),
-        })
-        .collect();
+    let tools = if include_tools {
+        Some(get_browser_tools())
+    } else {
+        None
+    };
 
     let request = OpenAIChatRequest {
         model: model.to_string(),
-        messages: api_messages,
+        messages: messages.to_vec(),
         max_tokens: 1024,
         temperature: 0.7,
+        tools,
     };
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -1251,7 +1418,6 @@ fn send_chat_message(api_key: &str, model: &str, base_url: &str, messages: &[Cha
         .json(&request)
         .send()?;
 
-    // Check HTTP status first
     if !response.status().is_success() {
         let status = response.status();
         let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
@@ -1260,15 +1426,24 @@ fn send_chat_message(api_key: &str, model: &str, base_url: &str, messages: &[Cha
 
     let result: OpenAIChatResponse = response.json()?;
 
-    // Check for API error in response
     if let Some(error) = result.error {
         anyhow::bail!("API error: {}", error.message);
     }
 
-    // Get the response message
     if let Some(choices) = result.choices {
         if let Some(choice) = choices.first() {
-            Ok(choice.message.content.clone())
+            // Check if there are tool calls
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                if !tool_calls.is_empty() {
+                    return Ok(ChatApiResponse::ToolCalls(tool_calls.clone()));
+                }
+            }
+            // Otherwise return content
+            if let Some(content) = &choice.message.content {
+                Ok(ChatApiResponse::Content(content.clone()))
+            } else {
+                Ok(ChatApiResponse::Content(String::new()))
+            }
         } else {
             anyhow::bail!("No choices in API response")
         }
@@ -1277,11 +1452,193 @@ fn send_chat_message(api_key: &str, model: &str, base_url: &str, messages: &[Cha
     }
 }
 
-fn send_chat_message_with_fallback(api_key: &str, base_url: &str, models: &[String], messages: &[ChatMessage]) -> Result<String> {
+/// Execute a tool call - sends action to app and returns result string
+fn execute_tool_call(
+    tool_call: &ToolCall,
+    context: &BrowserContext,
+    tx: &Sender<AppMessage>,
+) -> String {
+    let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)
+        .unwrap_or(serde_json::json!({}));
+
+    match tool_call.function.name.as_str() {
+        "navigate" => {
+            if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
+                let _ = tx.send(AppMessage::ToolAction(ToolAction::Navigate(url.to_string())));
+                format!("Navigating to: {}", url)
+            } else {
+                "Error: Missing 'url' parameter".to_string()
+            }
+        }
+        "follow_link" => {
+            if let Some(link_num) = args.get("link_number").and_then(|v| v.as_i64()) {
+                let idx = (link_num - 1) as usize;
+                if idx < context.links.len() {
+                    let _ = tx.send(AppMessage::ToolAction(ToolAction::FollowLink(idx)));
+                    format!("Following link {}", link_num)
+                } else {
+                    format!("Error: Link {} not found. Available links: 1-{}", link_num, context.links.len())
+                }
+            } else {
+                "Error: Missing 'link_number' parameter".to_string()
+            }
+        }
+        "scroll" => {
+            let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
+            let amount = args.get("amount").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
+            let _ = tx.send(AppMessage::ToolAction(ToolAction::Scroll {
+                direction: direction.clone(),
+                amount
+            }));
+            format!("Scrolling {} by {} lines", direction, amount)
+        }
+        "get_page_content" => {
+            if context.content.is_empty() {
+                "No page currently loaded.".to_string()
+            } else {
+                format!("Page content:\n{}", context.content)
+            }
+        }
+        "list_links" => {
+            if context.links.is_empty() {
+                "No links on current page.".to_string()
+            } else {
+                let links_list: Vec<String> = context.links.iter()
+                    .enumerate()
+                    .map(|(i, (text, url))| format!("{}. {} ({})", i + 1, text, url))
+                    .collect();
+                format!("Links on page:\n{}", links_list.join("\n"))
+            }
+        }
+        _ => format!("Unknown tool: {}", tool_call.function.name),
+    }
+}
+
+/// Browser context for tool execution
+struct BrowserContext {
+    title: String,
+    url: String,
+    content: String,
+    links: Vec<(String, String)>, // (text, url)
+}
+
+fn send_chat_message(
+    api_key: &str,
+    model: &str,
+    base_url: &str,
+    messages: &[ChatMessage],
+    tx: &Sender<AppMessage>,
+) -> Result<String> {
+    // Convert our messages to OpenAI format
+    let mut api_messages: Vec<OpenAIChatMessage> = messages
+        .iter()
+        .map(|m| OpenAIChatMessage {
+            role: match m.role {
+                crate::chat::Role::System => "system".to_string(),
+                crate::chat::Role::User => "user".to_string(),
+                crate::chat::Role::Assistant => "assistant".to_string(),
+                crate::chat::Role::Tool => "tool".to_string(),
+            },
+            content: Some(m.content.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+        })
+        .collect();
+
+    // Extract browser context from system message if available
+    let context = extract_browser_context(&api_messages);
+
+    // Try with tools first, then without if it fails
+    let response = match send_chat_message_with_tools(api_key, model, base_url, &api_messages, true) {
+        Ok(resp) => resp,
+        Err(_) => {
+            // Retry without tools (for models that don't support them)
+            send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)?
+        }
+    };
+
+    match response {
+        ChatApiResponse::Content(content) => Ok(content),
+        ChatApiResponse::ToolCalls(tool_calls) => {
+            // Execute tool calls and send results back
+            let assistant_msg = OpenAIChatMessage {
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(tool_calls.clone()),
+                tool_call_id: None,
+            };
+            api_messages.push(assistant_msg);
+
+            // Execute each tool and add results
+            for tool_call in &tool_calls {
+                let result = execute_tool_call(tool_call, &context, tx);
+                api_messages.push(OpenAIChatMessage {
+                    role: "tool".to_string(),
+                    content: Some(result),
+                    tool_calls: None,
+                    tool_call_id: Some(tool_call.id.clone()),
+                });
+            }
+
+            // Continue conversation without tools to get final response
+            match send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)? {
+                ChatApiResponse::Content(content) => Ok(content),
+                ChatApiResponse::ToolCalls(_) => {
+                    // If we still get tool calls, just return a summary
+                    Ok("Tool calls processed. Check the browser for results.".to_string())
+                }
+            }
+        }
+    }
+}
+
+/// Extract browser context from messages
+fn extract_browser_context(messages: &[OpenAIChatMessage]) -> BrowserContext {
+    let mut context = BrowserContext {
+        title: String::new(),
+        url: String::new(),
+        content: String::new(),
+        links: Vec::new(),
+    };
+
+    // Look for context in user messages
+    for msg in messages {
+        if msg.role == "user" {
+            if let Some(content) = &msg.content {
+                if content.contains("[Browser Context]") {
+                    // Parse the context
+                    for line in content.lines() {
+                        if line.starts_with("Current page:") {
+                            let parts: Vec<&str> = line.split('(').collect();
+                            if parts.len() >= 2 {
+                                context.title = parts[0].replace("Current page:", "").trim().to_string();
+                                context.url = parts[1].trim_end_matches(')').to_string();
+                            }
+                        } else if line.starts_with("Content preview:") {
+                            // Content follows after this line
+                            let idx = content.find("Content preview:").unwrap_or(0);
+                            context.content = content[idx..].lines().skip(1).take(10).collect::<Vec<_>>().join("\n");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    context
+}
+
+fn send_chat_message_with_fallback(
+    api_key: &str,
+    base_url: &str,
+    models: &[String],
+    messages: &[ChatMessage],
+    tx: &Sender<AppMessage>,
+) -> Result<String> {
     let mut errors = Vec::new();
 
     for (i, model) in models.iter().enumerate() {
-        match send_chat_message(api_key, model, base_url, messages) {
+        match send_chat_message(api_key, model, base_url, messages, tx) {
             Ok(response) => {
                 if i > 0 {
                     // Used a fallback model
