@@ -11,9 +11,9 @@ use regex::Regex;
 
 use super::{AZUL_BLUE, TOKYO_BLUE, TOKYO_COMMENT, TOKYO_GREEN, TOKYO_ORANGE, TOKYO_PURPLE, TOKYO_TEXT};
 
-// Additional accent colors for better visual hierarchy
-const HEADER_ACCENT: Color = Color::Rgb(255, 121, 198);  // Pink
-const LINK_COLOR: Color = Color::Rgb(139, 233, 253);     // Cyan
+// Warm Paper DARK accent colors for visual hierarchy
+const HEADER_ACCENT: Color = Color::Rgb(220, 170, 90);   // Amber for headers
+const LINK_COLOR: Color = Color::Rgb(120, 155, 185);     // Warm blue for links
 
 /// Represents a parsed markdown element
 #[derive(Debug, Clone)]
@@ -366,7 +366,7 @@ impl StyledMarkdown {
                     }
                     spans.push(Span::styled(
                         format!(" {} ", code_text),
-                        Style::default().fg(TOKYO_GREEN).bg(Color::Rgb(30, 32, 48)),
+                        Style::default().fg(Color::Rgb(130, 165, 110)).bg(Color::Rgb(35, 32, 28)),
                     ));
                 }
                 // Link: [text](url)
@@ -475,7 +475,7 @@ impl StyledMarkdown {
                     }
                     spans.push(Span::styled(
                         format!(" {} ", code_text),
-                        Style::default().fg(TOKYO_GREEN).bg(Color::Rgb(30, 32, 48)),
+                        Style::default().fg(Color::Rgb(130, 165, 110)).bg(Color::Rgb(35, 32, 28)),
                     ));
                 }
                 _ => current.push(c),

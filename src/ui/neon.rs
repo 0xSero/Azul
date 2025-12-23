@@ -5,12 +5,13 @@ use ratatui::{
     widgets::Widget,
 };
 
+// Warm Paper border - golden glow animation
 pub const NEON_COLORS: &[Color] = &[
-    Color::Rgb(137, 180, 250),
-    Color::Rgb(148, 226, 213),
-    Color::Rgb(249, 226, 175),
-    Color::Rgb(245, 189, 230),
-    Color::Rgb(203, 166, 247),
+    Color::Rgb(194, 154, 108),  // Warm gold
+    Color::Rgb(214, 168, 92),   // Bright amber
+    Color::Rgb(180, 140, 90),   // Deep gold
+    Color::Rgb(160, 128, 80),   // Tan
+    Color::Rgb(140, 115, 75),   // Bronze
 ];
 
 pub struct NeonBorder {

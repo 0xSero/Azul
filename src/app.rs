@@ -1078,24 +1078,60 @@ impl App {
                     self.chat_input.clear();
                     self.chat_scroll = 0;
 
-                    let context = self.get_browser_context();
+                    let browser_context = self.get_browser_context();
+                    let rag_url = self.config.rag_base_url.clone()
+                        .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
 
                     if let Some(session) = &mut self.chat_session {
-                        session.add_user_message(format!("{}\n\n{}", context, message));
+                        // Show user message immediately
+                        session.add_user_message(message.clone());
 
                         let api_key = self.config.get_api_key().unwrap_or("").to_string();
                         let base_url = self.config.get_ai_base_url()
                             .unwrap_or("https://openrouter.ai/api/v1")
                             .to_string();
                         let models = session.available_models.clone();
-                        let messages = session.messages.clone();
+                        let mut messages = session.messages.clone();
                         let tx = self.page_tx.clone();
 
                         self.mascot.set_state(crate::mascot::MascotState::Loading);
-                        self.status_message = "Thinking...".to_string();
+                        self.status_message = "Querying RAG...".to_string();
+
+                        let exa_key = self.config.get_exa_api_key();
 
                         std::thread::spawn(move || {
-                            match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages, &tx) {
+                            // Step 1: Query BOTH RAG and Exa in parallel-ish
+                            let rag_context = query_rag_for_context(&rag_url, &message);
+
+                            // Step 2: ALWAYS query Exa for web results
+                            let exa_context = query_exa_for_context(&message, exa_key.as_deref());
+
+                            // Step 3: Build enhanced context and add to last user message
+                            let mut context_parts = Vec::new();
+                            if !browser_context.is_empty() {
+                                context_parts.push(browser_context);
+                            }
+                            if !rag_context.is_empty() && !rag_context.contains("unavailable") {
+                                context_parts.push(format!("<rag_results>\n{}\n</rag_results>", rag_context));
+                            }
+                            if !exa_context.is_empty() {
+                                context_parts.push(format!("<web_search>\n{}\n</web_search>", exa_context));
+                            }
+
+                            // Modify the last user message to include context
+                            if let Some(last_msg) = messages.last_mut() {
+                                if last_msg.role == crate::chat::Role::User {
+                                    let enhanced_content = if context_parts.is_empty() {
+                                        last_msg.content.clone()
+                                    } else {
+                                        format!("{}\n\n**User Question:** {}", context_parts.join("\n\n"), last_msg.content)
+                                    };
+                                    last_msg.content = enhanced_content;
+                                }
+                            }
+
+                            // Step 4: Send to LLM (without tool calling - just use the context)
+                            match send_chat_simple(&api_key, &base_url, &models, &messages) {
                                 Ok(response) => {
                                     let _ = tx.send(AppMessage::ChatResponse(response));
                                 }
@@ -1128,73 +1164,168 @@ impl App {
             KeyCode::Esc => {
                 self.panel_mode = PanelMode::None;
             }
-            // Scrolling results with j/k or arrows (scroll = 0 is top)
-            KeyCode::Up | KeyCode::Char('k') if !self.rag_results.is_empty() => {
-                self.rag_scroll = self.rag_scroll.saturating_sub(1);
+            // Scrolling results with j/k or arrows - ALWAYS allow when results exist
+            KeyCode::Up | KeyCode::Char('k') => {
+                if !self.rag_results.is_empty() {
+                    self.rag_scroll = self.rag_scroll.saturating_sub(3);
+                }
             }
-            KeyCode::Down | KeyCode::Char('j') if !self.rag_results.is_empty() => {
-                self.rag_scroll = self.rag_scroll.saturating_add(1);
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !self.rag_results.is_empty() {
+                    self.rag_scroll = self.rag_scroll.saturating_add(3);
+                }
             }
             KeyCode::PageUp => {
-                self.rag_scroll = self.rag_scroll.saturating_sub(10);
+                self.rag_scroll = self.rag_scroll.saturating_sub(15);
             }
             KeyCode::PageDown => {
-                self.rag_scroll = self.rag_scroll.saturating_add(10);
+                self.rag_scroll = self.rag_scroll.saturating_add(15);
             }
-            KeyCode::Char('g') if !self.rag_results.is_empty() => {
+            KeyCode::Home | KeyCode::Char('g') => {
                 self.rag_scroll = 0; // Top
             }
-            KeyCode::Char('G') if !self.rag_results.is_empty() => {
-                self.rag_scroll = usize::MAX; // Bottom (will be clamped in render)
+            KeyCode::End | KeyCode::Char('G') => {
+                self.rag_scroll = self.rag_results.len().saturating_sub(5); // Near bottom
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if !self.rag_loading => {
                 self.rag_query.push(c);
             }
-            KeyCode::Backspace => {
+            KeyCode::Backspace if !self.rag_loading => {
                 self.rag_query.pop();
             }
             KeyCode::Enter => {
-                if !self.rag_query.is_empty() && self.rag_client.is_some() && !self.rag_loading {
+                if !self.rag_query.is_empty() && !self.rag_loading {
                     let query = self.rag_query.clone();
-                    self.status_message = format!("Querying RAG: {}...", query);
+                    self.status_message = format!("Researching: {}...", query);
                     self.rag_loading = true;
                     self.rag_results.clear();
+                    self.rag_scroll = 0;
                     self.mascot.set_state(MascotState::Loading);
 
                     // Clone what we need for the thread
                     let tx = self.page_tx.clone();
-                    let rag_url = self.config.rag_base_url.clone().unwrap_or_else(|| "http://localhost:8100".to_string());
+                    let rag_url = self.config.rag_base_url.clone().unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
+                    let exa_key = self.config.get_exa_api_key();
+                    let api_key = self.config.get_api_key().unwrap_or("").to_string();
+                    let base_url = self.config.get_ai_base_url().unwrap_or("https://api.minimax.io/v1").to_string();
+                    let model = self.config.get_ai_model().unwrap_or("MiniMax-M2.1").to_string();
 
                     std::thread::spawn(move || {
-                        // Create a new client in the thread
-                        match crate::rag::RagClient::new(rag_url) {
-                            Ok(rag) => {
-                                match rag.query(&query, Some(5)) {
-                                    Ok(response) => {
-                                        let mut results = vec![
-                                            format!("## Answer\n\n{}", response.answer),
-                                            String::new(),
-                                            "---".to_string(),
-                                            String::new(),
-                                            format!("## Sources ({})", response.sources.len()),
-                                        ];
-                                        for (i, s) in response.sources.iter().enumerate() {
-                                            let content = s.text.as_ref().unwrap_or(&s.content);
-                                            let score = s.similarity.unwrap_or(s.score);
-                                            results.push(format!("\n**[{}]** score: {:.2}", i + 1, score));
-                                            results.push(content.clone());
-                                        }
-                                        let _ = tx.send(AppMessage::RagResponse(results));
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(AppMessage::RagError(e.to_string()));
-                                    }
+                        // Step 1: Gather sources from Exa and RAG
+                        let exa_context = query_exa_for_context(&query, exa_key.as_deref());
+                        let rag_context = query_rag_for_context(&rag_url, &query);
+
+                        // Check if we have any sources
+                        let has_exa = !exa_context.is_empty();
+                        let has_rag = !rag_context.is_empty()
+                            && !rag_context.contains("unavailable")
+                            && !rag_context.contains("No sources found");
+
+                        if !has_exa && !has_rag {
+                            let results = vec![
+                                "# ❌ No Results Found".to_string(),
+                                String::new(),
+                                "Neither Exa nor RAG returned results for this query.".to_string(),
+                                String::new(),
+                                "**Troubleshooting:**".to_string(),
+                                "- Verify exa_api_key is in ~/.config/azul/config.json".to_string(),
+                                "- Check home-rag: curl http://127.0.0.1:3002/health".to_string(),
+                            ];
+                            let _ = tx.send(AppMessage::RagResponse(results));
+                            return;
+                        }
+
+                        // Step 2: Build context for LLM
+                        let mut sources_context = String::new();
+                        if has_exa {
+                            sources_context.push_str("## Web Search Results (Exa)\n\n");
+                            sources_context.push_str(&exa_context);
+                            sources_context.push_str("\n\n");
+                        }
+                        if has_rag {
+                            sources_context.push_str("## Local Knowledge (RAG)\n\n");
+                            sources_context.push_str(&rag_context);
+                        }
+
+                        // Step 3: Ask LLM to synthesize
+                        let synthesis_prompt = format!(
+                            "You are a research assistant. Based on the sources below, provide a comprehensive answer.\n\n\
+                            **User Question:** {}\n\n\
+                            **Sources:**\n{}\n\n\
+                            **Instructions:**\n\
+                            1. Synthesize information from all sources into a clear, organized answer\n\
+                            2. Use markdown formatting (headers, bullet points, bold)\n\
+                            3. End with a Sources section listing URLs and document names\n\
+                            4. If sources conflict, note the discrepancy\n\
+                            5. Be comprehensive but concise",
+                            query, sources_context
+                        );
+
+                        let messages = vec![
+                            serde_json::json!({
+                                "role": "user",
+                                "content": synthesis_prompt
+                            })
+                        ];
+
+                        // Call LLM
+                        let client = reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_secs(120))
+                            .build()
+                            .unwrap();
+
+                        let request = serde_json::json!({
+                            "model": model,
+                            "messages": messages,
+                            "max_tokens": 2048,
+                            "temperature": 0.3
+                        });
+
+                        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+                        let llm_response = client
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .header("Authorization", format!("Bearer {}", api_key))
+                            .json(&request)
+                            .send()
+                            .ok()
+                            .and_then(|r| r.json::<serde_json::Value>().ok())
+                            .and_then(|j| {
+                                j.get("choices")?.get(0)?
+                                    .get("message")?.get("content")?
+                                    .as_str().map(|s| s.to_string())
+                            });
+
+                        // Step 4: Format results
+                        let mut results = Vec::new();
+
+                        if let Some(synthesis) = llm_response {
+                            results.push(format!("# 🔍 Research: {}", query));
+                            results.push(String::new());
+                            for line in synthesis.lines() {
+                                results.push(line.to_string());
+                            }
+                        } else {
+                            // Fallback: show raw sources if LLM fails
+                            results.push("# 🔍 Search Results (LLM unavailable)".to_string());
+                            results.push(String::new());
+                            if has_exa {
+                                results.push("## 🌐 Web (Exa)".to_string());
+                                for line in exa_context.lines() {
+                                    results.push(line.to_string());
+                                }
+                                results.push(String::new());
+                            }
+                            if has_rag {
+                                results.push("## 📚 Local (RAG)".to_string());
+                                for line in rag_context.lines() {
+                                    results.push(line.to_string());
                                 }
                             }
-                            Err(e) => {
-                                let _ = tx.send(AppMessage::RagError(format!("Failed to connect: {}", e)));
-                            }
                         }
+
+                        let _ = tx.send(AppMessage::RagResponse(results));
                     });
                 }
             }
@@ -1218,25 +1349,29 @@ impl App {
     }
 
     fn get_browser_context(&self) -> String {
-        let mut context = String::from("[Browser Context]");
-
+        // Only return context if there's an actual page loaded
         if let Some(page) = self.current_page() {
-            context.push_str(&format!(
-                "\nCurrent page: {} ({})\nLinks: {}\nContent preview:\n{}",
-                page.title,
-                page.url,
-                page.links.len(),
-                page.content_lines.iter()
-                    .take(10)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ));
-        } else {
-            context.push_str("\nNo page currently loaded.");
-        }
+            let content_preview = page.content_lines.iter()
+                .take(15)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
 
-        context
+            if !content_preview.trim().is_empty() {
+                format!(
+                    "<current_page>\nTitle: {}\nURL: {}\nLinks: {}\n\n{}\n</current_page>",
+                    page.title,
+                    page.url,
+                    page.links.len(),
+                    content_preview
+                )
+            } else {
+                String::new()
+            }
+        } else {
+            // Return empty string - don't confuse the LLM with "no page loaded"
+            String::new()
+        }
     }
 
     fn refresh_memory(&mut self) {
@@ -1348,8 +1483,33 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
+                name: "exa_search".to_string(),
+                description: "Search the web using Exa AI-powered search. Best for finding high-quality, relevant content. Use this as the primary search tool.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query - can be a question or keywords"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "Number of results to return (default 5, max 10)"
+                        },
+                        "use_autoprompt": {
+                            "type": "boolean",
+                            "description": "Let Exa enhance the query for better results (default true)"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
                 name: "brave_search".to_string(),
-                description: "Search the web using Brave Search API. Use this to find current information, news, or answer questions that require up-to-date web data.".to_string(),
+                description: "Search the web using Brave Search API. Use as fallback if Exa is unavailable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -1360,6 +1520,27 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
                         "count": {
                             "type": "integer",
                             "description": "Number of results to return (default 5, max 20)"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "rag_query".to_string(),
+                description: "Query the local knowledge base (home-rag) for information from ingested documents. Use this for questions about local documentation, code, or previously saved content.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The question or search query"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of sources to retrieve (default 5)"
                         }
                     },
                     "required": ["query"]
@@ -1579,6 +1760,325 @@ fn send_chat_message_with_tools(
 }
 
 /// Execute a tool call - sends action to app and returns result string
+/// Query RAG for context (called automatically before LLM)
+fn query_rag_for_context(rag_url: &str, query: &str) -> String {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build() {
+            Ok(c) => c,
+            Err(_) => return "RAG unavailable".to_string(),
+        };
+
+    let request_body = serde_json::json!({
+        "query": query,
+        "top_k": 5,
+        "use_graph": true
+    });
+
+    match client
+        .post(format!("{}/query", rag_url))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+    {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(json) = resp.json::<serde_json::Value>() {
+                let answer = json.get("answer").and_then(|a| a.as_str()).unwrap_or("");
+                let sources = json.get("sources").and_then(|s| s.as_array());
+
+                let mut result = String::new();
+
+                if !answer.is_empty() {
+                    result.push_str(&format!("**RAG Answer:**\n{}\n\n", answer));
+                }
+
+                if let Some(sources) = sources {
+                    if !sources.is_empty() {
+                        result.push_str("**Sources:**\n");
+                        for (i, src) in sources.iter().take(5).enumerate() {
+                            let content = src.get("content")
+                                .or_else(|| src.get("text"))
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("");
+                            let doc_id = src.get("document_id")
+                                .or_else(|| src.get("id"))
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("unknown");
+                            let score = src.get("similarity")
+                                .or_else(|| src.get("score"))
+                                .and_then(|s| s.as_f64())
+                                .unwrap_or(0.0);
+
+                            let preview = if content.len() > 300 { &content[..300] } else { content };
+                            result.push_str(&format!("{}. [{}] (score: {:.2})\n   {}\n\n", i + 1, doc_id, score, preview));
+                        }
+                    } else {
+                        result.push_str("No sources found in RAG.\n");
+                    }
+                }
+
+                if result.is_empty() {
+                    "No sources found in RAG.".to_string()
+                } else {
+                    result
+                }
+            } else {
+                "RAG response parse error".to_string()
+            }
+        }
+        Ok(resp) => format!("RAG error: {}", resp.status()),
+        Err(_) => "RAG service unavailable".to_string(),
+    }
+}
+
+/// Query Exa for context (called if RAG has no results)
+fn query_exa_for_context(query: &str, api_key: Option<&str>) -> String {
+    let api_key = api_key
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("EXA_API_KEY").ok())
+        .unwrap_or_default();
+
+    if api_key.is_empty() {
+        return String::new();
+    }
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build() {
+            Ok(c) => c,
+            Err(_) => return String::new(),
+        };
+
+    let request_body = serde_json::json!({
+        "query": query,
+        "numResults": 5,
+        "useAutoprompt": true,
+        "type": "auto",
+        "contents": {
+            "text": { "maxCharacters": 500 }
+        }
+    });
+
+    match client
+        .post("https://api.exa.ai/search")
+        .header("Content-Type", "application/json")
+        .header("x-api-key", &api_key)
+        .json(&request_body)
+        .send()
+    {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(json) = resp.json::<serde_json::Value>() {
+                let mut result = String::from("**Web Search Results (Exa):**\n\n");
+                if let Some(items) = json.get("results").and_then(|r| r.as_array()) {
+                    for (i, item) in items.iter().take(5).enumerate() {
+                        let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+                        let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                        let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                        let preview = if text.len() > 300 { &text[..300] } else { text };
+                        result.push_str(&format!("{}. **{}**\n   {}\n   {}\n\n", i + 1, title, url, preview));
+                    }
+                    result
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+/// Simple chat without tool calling (for MiniMax compatibility)
+fn send_chat_simple(
+    api_key: &str,
+    base_url: &str,
+    models: &[String],
+    messages: &[crate::chat::ChatMessage],
+) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
+
+    // Convert messages to API format
+    let api_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "role": match m.role {
+                    crate::chat::Role::System => "system",
+                    crate::chat::Role::User => "user",
+                    crate::chat::Role::Assistant => "assistant",
+                    crate::chat::Role::Tool => "user",
+                },
+                "content": m.content
+            })
+        })
+        .collect();
+
+    let mut last_error = String::new();
+
+    for model in models {
+        let request = serde_json::json!({
+            "model": model,
+            "messages": api_messages,
+            "max_tokens": 2048,
+            "temperature": 0.7
+        });
+
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+        match client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&request)
+            .send()
+        {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(json) = resp.json::<serde_json::Value>() {
+                    if let Some(content) = json
+                        .get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("message"))
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        return Ok(content.to_string());
+                    }
+                }
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let err = resp.text().unwrap_or_default();
+                if status.as_u16() == 429 {
+                    last_error = format!("Rate limited on {}", model);
+                    continue;
+                }
+                last_error = format!("{}: {}", status, err);
+            }
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
+    }
+
+    anyhow::bail!("All models failed: {}", last_error)
+}
+
+/// Execute Exa Search API call
+fn exa_search(query: &str, num_results: usize, use_autoprompt: bool) -> Result<String> {
+    let api_key = std::env::var("EXA_API_KEY")
+        .unwrap_or_default();
+
+    if api_key.is_empty() {
+        return Ok("Error: EXA_API_KEY not set. Get one at https://exa.ai".to_string());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let num_results = num_results.min(10).max(1);
+
+    let request_body = serde_json::json!({
+        "query": query,
+        "numResults": num_results,
+        "useAutoprompt": use_autoprompt,
+        "type": "auto",
+        "contents": {
+            "text": {
+                "maxCharacters": 500
+            }
+        }
+    });
+
+    let response = client
+        .post("https://api.exa.ai/search")
+        .header("Content-Type", "application/json")
+        .header("x-api-key", &api_key)
+        .json(&request_body)
+        .send()?;
+
+    if !response.status().is_success() {
+        return Ok(format!("Exa search failed: {}", response.status()));
+    }
+
+    let json: serde_json::Value = response.json()?;
+
+    let mut results = Vec::new();
+    if let Some(items) = json.get("results").and_then(|r| r.as_array()) {
+        for (i, result) in items.iter().take(num_results).enumerate() {
+            let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+            let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let text = result.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            let score = result.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+
+            results.push(format!(
+                "{}. **{}** (score: {:.2})\n   {}\n   {}\n",
+                i + 1, title, score, url,
+                if text.len() > 200 { &text[..200] } else { text }
+            ));
+        }
+    }
+
+    if results.is_empty() {
+        Ok("No results found".to_string())
+    } else {
+        Ok(format!("## Exa Search: {}\n\n{}", query, results.join("\n")))
+    }
+}
+
+/// Query local RAG system
+fn rag_query_tool(query: &str, top_k: usize) -> Result<String> {
+    let rag_url = std::env::var("RAG_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3002".to_string());
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()?;
+
+    let request_body = serde_json::json!({
+        "query": query,
+        "top_k": top_k,
+        "use_graph": true
+    });
+
+    let response = client
+        .post(format!("{}/query", rag_url))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send();
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            let json: serde_json::Value = resp.json()?;
+            let answer = json.get("answer").and_then(|a| a.as_str()).unwrap_or("No answer");
+            let sources = json.get("sources").and_then(|s| s.as_array());
+
+            let mut result = format!("## RAG Answer\n\n{}\n\n", answer);
+
+            if let Some(sources) = sources {
+                if !sources.is_empty() {
+                    result.push_str("### Sources\n");
+                    for (i, src) in sources.iter().take(3).enumerate() {
+                        let content = src.get("content")
+                            .or_else(|| src.get("text"))
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("");
+                        let preview = if content.len() > 150 { &content[..150] } else { content };
+                        result.push_str(&format!("{}. {}\n", i + 1, preview));
+                    }
+                }
+            }
+
+            Ok(result)
+        }
+        Ok(resp) => Ok(format!("RAG query failed: {}", resp.status())),
+        Err(_) => Ok("RAG service unavailable. Start with: home-rag API on port 3002".to_string()),
+    }
+}
+
 fn execute_tool_call(
     tool_call: &ToolCall,
     context: &BrowserContext,
@@ -1588,6 +2088,29 @@ fn execute_tool_call(
         .unwrap_or(serde_json::json!({}));
 
     match tool_call.function.name.as_str() {
+        "exa_search" => {
+            if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
+                let num_results = args.get("num_results").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
+                let use_autoprompt = args.get("use_autoprompt").and_then(|v| v.as_bool()).unwrap_or(true);
+                match exa_search(query, num_results, use_autoprompt) {
+                    Ok(results) => results,
+                    Err(e) => format!("Exa search error: {}", e),
+                }
+            } else {
+                "Error: Missing 'query' parameter".to_string()
+            }
+        }
+        "rag_query" => {
+            if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
+                let top_k = args.get("top_k").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
+                match rag_query_tool(query, top_k) {
+                    Ok(results) => results,
+                    Err(e) => format!("RAG error: {}", e),
+                }
+            } else {
+                "Error: Missing 'query' parameter".to_string()
+            }
+        }
         "brave_search" => {
             if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
                 let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(5) as usize;

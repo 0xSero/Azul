@@ -15,6 +15,8 @@ pub struct Config {
     pub rag_base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exa_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,19 +48,19 @@ pub struct AIConfig {
 }
 
 fn default_accent() -> String {
-    "#00BFFF".to_string() // Deep sky blue (Azul theme)
+    "#9f8a60".to_string() // Warm tan (Warm Paper theme)
 }
 
 fn default_border() -> String {
-    "#7aa2f7".to_string() // Tokyo Night blue
+    "#33312f".to_string() // Charcoal border (Warm Paper theme)
 }
 
 fn default_text() -> String {
-    "#c0caf5".to_string() // Tokyo Night foreground
+    "#f0ece0".to_string() // Warm cream (Warm Paper theme)
 }
 
 fn default_bg() -> String {
-    "#1a1b26".to_string() // Tokyo Night background
+    "#1b1b1b".to_string() // Rich charcoal (Warm Paper theme)
 }
 
 fn default_refresh_rate() -> u64 {
@@ -84,6 +86,7 @@ impl Default for Config {
             refresh_rate_ms: default_refresh_rate(),
             rag_base_url: None,
             memory_scope: None,
+            exa_api_key: None,
         }
     }
 }
@@ -235,6 +238,13 @@ impl Config {
     /// Get the AI base URL
     pub fn get_ai_base_url(&self) -> Option<&str> {
         self.ai.as_ref()?.base_url.as_deref()
+    }
+
+    /// Get the Exa API key (from config or environment)
+    pub fn get_exa_api_key(&self) -> Option<String> {
+        // Config takes precedence, then env var
+        self.exa_api_key.clone()
+            .or_else(|| std::env::var("EXA_API_KEY").ok())
     }
 }
 

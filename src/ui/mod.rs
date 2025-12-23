@@ -1,4 +1,3 @@
-mod neon;
 pub mod markdown;
 pub mod theme;
 
@@ -6,27 +5,52 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Focus, PanelMode, ViewMode};
 use crate::mascot;
-use neon::NeonBorder;
 use markdown::StyledMarkdown;
 
-// Tokyo Night color palette (made pub for markdown module)
-pub const AZUL_BLUE: Color = Color::Rgb(0, 191, 255);
-pub const TOKYO_BLUE: Color = Color::Rgb(122, 162, 247);
-pub const TOKYO_PURPLE: Color = Color::Rgb(187, 154, 247);
-pub const TOKYO_ORANGE: Color = Color::Rgb(255, 169, 0);
-pub const TOKYO_GREEN: Color = Color::Rgb(158, 206, 106);
-pub const TOKYO_RED: Color = Color::Rgb(247, 118, 142);
-pub const TOKYO_TEXT: Color = Color::Rgb(192, 202, 245);
-pub const TOKYO_COMMENT: Color = Color::Rgb(125, 137, 168);
-pub const TOKYO_BG: Color = Color::Rgb(26, 27, 38);
-pub const TOKYO_CYAN: Color = Color::Rgb(125, 207, 255);
+// Warm Paper DARK - cozy dark with warm undertones
+// Background layers (warm darks, not cold)
+pub const BG_BASE: Color = Color::Rgb(28, 26, 24);          // Warm black #1c1a18
+pub const BG_SURFACE: Color = Color::Rgb(38, 35, 32);       // Warm charcoal #262320
+pub const BG_ELEVATED: Color = Color::Rgb(50, 46, 42);      // Warm brown-gray #322e2a
+pub const BG_HIGHLIGHT: Color = Color::Rgb(65, 58, 50);     // Warm tan-dark #413a32
+
+// Border colors - visible warm lines
+pub const BORDER_DIM: Color = Color::Rgb(60, 55, 48);       // Subtle #3c3730
+pub const BORDER_DEFAULT: Color = Color::Rgb(85, 75, 65);   // Normal #554b41
+pub const BORDER_BRIGHT: Color = Color::Rgb(140, 120, 95);  // Focused #8c785f
+
+// Accent colors - warm and visible on dark
+pub const ACCENT_PRIMARY: Color = Color::Rgb(200, 160, 110);  // Warm gold #c8a06e
+pub const ACCENT_SECONDARY: Color = Color::Rgb(170, 135, 95); // Tan #aa875f
+pub const ACCENT_SUCCESS: Color = Color::Rgb(130, 165, 110);  // Sage #82a56e
+pub const ACCENT_WARNING: Color = Color::Rgb(220, 170, 90);   // Amber #dcaa5a
+pub const ACCENT_ERROR: Color = Color::Rgb(200, 110, 100);    // Terracotta #c86e64
+pub const ACCENT_INFO: Color = Color::Rgb(120, 155, 185);     // Warm blue #789bb9
+
+// Text colors - warm cream on dark
+pub const TEXT_PRIMARY: Color = Color::Rgb(235, 228, 215);    // Warm cream #ebe4d7
+pub const TEXT_SECONDARY: Color = Color::Rgb(175, 165, 150);  // Muted cream #afa596
+pub const TEXT_DIM: Color = Color::Rgb(120, 112, 100);        // Dim warm #787064
+
+// Legacy aliases
+pub const AZUL_BLUE: Color = ACCENT_PRIMARY;
+pub const TOKYO_BLUE: Color = BORDER_DEFAULT;
+pub const TOKYO_PURPLE: Color = ACCENT_SECONDARY;
+pub const TOKYO_ORANGE: Color = ACCENT_WARNING;
+pub const TOKYO_GREEN: Color = ACCENT_SUCCESS;
+pub const TOKYO_RED: Color = ACCENT_ERROR;
+pub const TOKYO_TEXT: Color = TEXT_PRIMARY;
+pub const TOKYO_COMMENT: Color = TEXT_DIM;
+pub const TOKYO_BG: Color = BG_BASE;
+pub const TOKYO_CYAN: Color = ACCENT_INFO;
+pub const FOCUS_RING: Color = BORDER_BRIGHT;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
@@ -34,50 +58,54 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Clear entire frame first to prevent artifacts when switching modes
-    frame.render_widget(Clear, full);
-
-    // Render neon border
-    frame.render_widget(
-        NeonBorder {
-            phase: app.animation_tick,
-        },
-        full,
-    );
+    // Fill entire frame with base background and simple border
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(BORDER_DIM))
+        .style(Style::default().bg(BG_BASE));
+    frame.render_widget(outer_block, full);
 
     let inner = full.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
 
-    // Main layout: Tab Bar | URL Bar | Content | Status
+    // Main layout with spacing
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),   // Tab bar
             Constraint::Length(3),   // URL bar
+            Constraint::Length(1),   // Spacer
             Constraint::Min(0),      // Main content
-            Constraint::Length(3),   // Status bar
+            Constraint::Length(2),   // Status bar (compact)
         ])
         .split(inner);
 
     render_tab_bar(frame, chunks[0], app);
     render_url_bar(frame, chunks[1], app);
+    // chunks[2] is spacer - empty
 
-    // Always show 3-panel layout: Links (15%) | Content (50%) | Chat (35%)
+    // 3-panel layout with gaps: Links | Content | Chat
+    let content_area = chunks[3];
     let split = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(15),  // Links (left)
-            Constraint::Percentage(50),  // Content (middle)
-            Constraint::Percentage(35),  // Chat (right)
+            Constraint::Percentage(14),  // Links (left)
+            Constraint::Length(1),       // Gap
+            Constraint::Percentage(48),  // Content (middle)
+            Constraint::Length(1),       // Gap
+            Constraint::Percentage(36),  // Chat (right)
         ])
-        .split(chunks[2]);
-    render_compact_sidebar(frame, split[0], app);
-    render_content_only(frame, split[1], app);
-    render_chat_side_panel(frame, split[2], app);
+        .split(content_area);
 
-    render_status_bar(frame, chunks[3], app);
+    render_compact_sidebar(frame, split[0], app);
+    // split[1] is gap
+    render_content_only(frame, split[2], app);
+    // split[3] is gap
+    render_chat_side_panel(frame, split[4], app);
+
+    render_status_bar(frame, chunks[4], app);
 
     // Render overlay panels (not chat anymore)
     match app.panel_mode {
@@ -95,6 +123,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
     let tabs = app.tabs.tabs();
     let active = app.tabs.active_index();
+    let bg_color = BG_SURFACE;
+
+    // Fill background
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, area);
 
     let mut spans = vec![];
 
@@ -103,31 +136,31 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
         let title = tab.display_title(15);
 
         let style = if is_active {
-            Style::default().fg(TOKYO_BG).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
+            Style::default().fg(BG_BASE).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TOKYO_TEXT)
+            Style::default().fg(TOKYO_TEXT).bg(bg_color)
         };
 
         // Tab number
-        spans.push(Span::styled(format!(" {} ", i + 1), Style::default().fg(TOKYO_COMMENT)));
+        spans.push(Span::styled(format!(" {} ", i + 1), Style::default().fg(TOKYO_COMMENT).bg(bg_color)));
         // Tab title
         spans.push(Span::styled(title, style));
 
         if tab.loading {
-            spans.push(Span::styled(" *", Style::default().fg(TOKYO_ORANGE)));
+            spans.push(Span::styled(" *", Style::default().fg(TOKYO_ORANGE).bg(bg_color)));
         }
 
-        spans.push(Span::raw(" |"));
+        spans.push(Span::styled(" |", Style::default().bg(bg_color)));
     }
 
     // Add new tab hint if not full
     if !app.tabs.is_full() {
-        spans.push(Span::styled(" + (t)", Style::default().fg(TOKYO_COMMENT)));
+        spans.push(Span::styled(" + (t)", Style::default().fg(TOKYO_COMMENT).bg(bg_color)));
     }
 
     let line = Line::from(spans);
     let paragraph = Paragraph::new(line)
-        .style(Style::default().fg(TOKYO_TEXT));
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
     frame.render_widget(paragraph, area);
 }
@@ -163,7 +196,8 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.focus == Focus::URLBar;
-    let border_color = if is_focused { AZUL_BLUE } else { TOKYO_BLUE };
+    let border_color = if is_focused { FOCUS_RING } else { TOKYO_BLUE };
+    let bg_color = if is_focused { BG_ELEVATED } else { BG_SURFACE };
 
     // Companion appears in URL bar when active
     let companion_prefix = match app.mascot.state() {
@@ -186,12 +220,13 @@ fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
+                .style(Style::default().bg(bg_color))
                 .title(if is_focused { " URL (editing) " } else { " URL " }),
         )
         .style(if is_focused {
-            Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)
+            Style::default().fg(AZUL_BLUE).bg(bg_color).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TOKYO_TEXT)
+            Style::default().fg(TOKYO_TEXT).bg(bg_color)
         });
 
     frame.render_widget(url_paragraph, area);
@@ -224,7 +259,8 @@ fn render_content_only(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.focus == Focus::Content;
-    let border_color = if is_focused { AZUL_BLUE } else { TOKYO_BLUE };
+    let border_color = if is_focused { FOCUS_RING } else { TOKYO_BLUE };
+    let bg_color = BG_SURFACE;
 
     let mode_label = match app.view_mode {
         ViewMode::Rendered => "content",
@@ -239,7 +275,7 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             format!(" {} ", mode_label)
         })
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
@@ -293,7 +329,7 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
         let content = Paragraph::new(visible_lines)
             .block(block)
-            .style(Style::default().fg(TOKYO_TEXT))
+            .style(Style::default().fg(TOKYO_TEXT).bg(bg_color))
             .wrap(Wrap { trim: false });
 
         frame.render_widget(content, area);
@@ -302,7 +338,7 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         let splash_text = mascot::mini_splash();
         let placeholder = Paragraph::new(splash_text)
             .block(block)
-            .style(Style::default().fg(AZUL_BLUE))
+            .style(Style::default().fg(AZUL_BLUE).bg(bg_color))
             .alignment(Alignment::Center);
 
         frame.render_widget(placeholder, area);
@@ -311,7 +347,8 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     let is_focused = app.focus == Focus::Sidebar;
-    let border_color = if is_focused { TOKYO_ORANGE } else { TOKYO_BLUE };
+    let border_color = if is_focused { FOCUS_RING } else { TOKYO_BLUE };
+    let bg_color = BG_SURFACE;
 
     let total_links = app.current_page().map(|p| p.links.len()).unwrap_or(0);
     let selected = app.sidebar_selected();
@@ -327,7 +364,8 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(title);
+        .title(title)
+        .style(Style::default().bg(bg_color));
 
     if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
@@ -362,16 +400,16 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
 
                 let is_selected = i == selected;
                 let style = if is_selected && is_focused {
-                    Style::default().fg(TOKYO_BG).bg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                    Style::default().fg(BG_BASE).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                    Style::default().fg(AZUL_BLUE).bg(BG_HIGHLIGHT).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(TOKYO_TEXT)
+                    Style::default().fg(TOKYO_TEXT).bg(bg_color)
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(number, Style::default().fg(TOKYO_COMMENT)),
-                    Span::raw(" "),
+                    Span::styled(number, Style::default().fg(TOKYO_COMMENT).bg(bg_color)),
+                    Span::styled(" ", Style::default().bg(bg_color)),
                     Span::styled(truncated, style),
                 ]))
             })
@@ -379,7 +417,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
 
         let list = List::new(items)
             .block(block)
-            .style(Style::default().fg(TOKYO_TEXT));
+            .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
         frame.render_widget(list, area);
     } else {
@@ -390,20 +428,9 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
 /// Compact sidebar for when chat is open (narrow links panel)
 fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.focus == Focus::Sidebar;
+    let bg_color = BG_SURFACE;
 
-    // Animated green-blue border when focused
-    let border_color = if is_focused {
-        // Cycle between green and blue based on animation
-        let colors = [
-            Color::Rgb(148, 226, 213),  // Teal
-            Color::Rgb(137, 180, 250),  // Blue
-            Color::Rgb(166, 227, 161),  // Green
-            Color::Rgb(116, 199, 236),  // Cyan
-        ];
-        colors[app.animation_tick % colors.len()]
-    } else {
-        TOKYO_BLUE
-    };
+    let border_color = if is_focused { BORDER_BRIGHT } else { BORDER_DEFAULT };
 
     let total_links = app.current_page().map(|p| p.links.len()).unwrap_or(0);
     let selected = app.sidebar_selected();
@@ -414,7 +441,7 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(title)
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     if let Some(page) = app.current_page() {
         let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
@@ -440,11 +467,11 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
             .map(|(i, link)| {
                 let is_selected = i == selected;
                 let style = if is_selected && is_focused {
-                    Style::default().fg(TOKYO_BG).bg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                    Style::default().fg(BG_BASE).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                    Style::default().fg(AZUL_BLUE).bg(BG_HIGHLIGHT).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(TOKYO_TEXT)
+                    Style::default().fg(TOKYO_TEXT).bg(bg_color)
                 };
 
                 // Show number + truncated link text
@@ -456,7 +483,7 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
 
         let list = List::new(items)
             .block(block)
-            .style(Style::default().fg(TOKYO_TEXT));
+            .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
         frame.render_widget(list, area);
     } else {
@@ -465,65 +492,37 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut App) {
-    let focus_name = match app.focus {
-        Focus::Content => "Content",
-        Focus::Sidebar => "Sidebar",
-        Focus::URLBar => "URL Bar",
-        Focus::TabBar => "Tab Bar",
-        Focus::Bookmarks => "Bookmarks",
-        Focus::History => "History",
-    };
-
-    // Tab info
-    let tab_info = format!("[{}/{}]", app.tabs.active_index() + 1, app.tabs.count());
-
-    // Status indicator
+    // Compact single-line status
+    let tab_info = format!("{}/{}", app.tabs.active_index() + 1, app.tabs.count());
     let companion = app.mascot.view_status();
 
-    let primary_line = Line::from(vec![
-        Span::styled(companion, Style::default().fg(AZUL_BLUE)),
-        Span::raw(" "),
-        Span::styled(tab_info, Style::default().fg(TOKYO_PURPLE)),
-        Span::raw(" "),
-        Span::styled(focus_name, Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
-        Span::raw(" "),
-        Span::styled(&app.status_message, Style::default().fg(TOKYO_TEXT)),
+    let status_line = Line::from(vec![
+        Span::styled(format!(" {} ", companion), Style::default().fg(ACCENT_PRIMARY)),
+        Span::styled(format!("[{}] ", tab_info), Style::default().fg(TEXT_SECONDARY)),
+        Span::styled(&app.status_message, Style::default().fg(TEXT_PRIMARY)),
+        Span::styled("  │  ", Style::default().fg(BORDER_DIM)),
+        Span::styled("/ search  t tab  b marks  ? help  q quit", Style::default().fg(TEXT_DIM)),
     ]);
 
-    // Update mascot position
-    app.mascot.set_screen_width(area.width.saturating_sub(4));
-    let mascot_sprite = app.mascot.walking_sprite();
-
-    // Shortcuts line with cute mascot at the end
-    let shortcuts = "/ search  t tab  b bookmarks  H history  c chat  ? help  q quit";
-    let secondary_line = Line::from(vec![
-        Span::styled(shortcuts, Style::default().fg(TOKYO_COMMENT)),
-        Span::raw("  "),
-        Span::styled(mascot_sprite, Style::default().fg(Color::Rgb(215, 119, 87))), // Clawd orange color
-    ]);
-
-    let status = Paragraph::new(vec![primary_line, secondary_line])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(TOKYO_BLUE)),
-        )
-        .style(Style::default().fg(TOKYO_TEXT));
+    let status = Paragraph::new(status_line)
+        .style(Style::default().fg(TEXT_PRIMARY).bg(BG_SURFACE));
 
     frame.render_widget(status, area);
 }
 
 fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
     let panel_area = centered_rect(60, 70, area);
+    let bg_color = BG_ELEVATED;
 
-    // Clear the area first
-    frame.render_widget(Clear, panel_area);
+    // Fill with elevated background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, panel_area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_ORANGE))
+        .border_style(Style::default().fg(AZUL_BLUE))
         .title(format!(" Bookmarks ({}) | j/k nav | Enter open | d delete | Esc close ", app.bookmarks_list.len()))
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
     let visible_rows = inner.height.saturating_sub(1) as usize;
@@ -531,7 +530,7 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.bookmarks_list.is_empty() {
         let empty = Paragraph::new("No bookmarks yet. Press B to bookmark current page.")
             .block(block)
-            .style(Style::default().fg(TOKYO_COMMENT))
+            .style(Style::default().fg(TOKYO_COMMENT).bg(bg_color))
             .alignment(Alignment::Center);
         frame.render_widget(empty, panel_area);
         return;
@@ -551,9 +550,9 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, bookmark)| {
             let is_selected = i == app.bookmarks_selected;
             let style = if is_selected {
-                Style::default().fg(TOKYO_BG).bg(TOKYO_ORANGE).add_modifier(Modifier::BOLD)
+                Style::default().fg(BG_BASE).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(TOKYO_TEXT)
+                Style::default().fg(TOKYO_TEXT).bg(bg_color)
             };
 
             let title = truncate_to_width(&bookmark.title, 40);
@@ -561,28 +560,31 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
 
             ListItem::new(vec![
                 Line::from(Span::styled(format!("  {} ", title), style)),
-                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT))),
+                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT).bg(bg_color))),
             ])
         })
         .collect();
 
     let list = List::new(items)
         .block(block)
-        .style(Style::default().fg(TOKYO_TEXT));
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
     frame.render_widget(list, panel_area);
 }
 
 fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
     let panel_area = centered_rect(60, 70, area);
+    let bg_color = BG_ELEVATED;
 
-    frame.render_widget(Clear, panel_area);
+    // Fill with elevated background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, panel_area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_BLUE))
+        .border_style(Style::default().fg(TOKYO_PURPLE))
         .title(format!(" History ({}) | j/k nav | Enter open | Esc close ", app.history_list.len()))
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
     let visible_rows = inner.height.saturating_sub(1) as usize;
@@ -590,7 +592,7 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.history_list.is_empty() {
         let empty = Paragraph::new("No history yet. Start browsing!")
             .block(block)
-            .style(Style::default().fg(TOKYO_COMMENT))
+            .style(Style::default().fg(TOKYO_COMMENT).bg(bg_color))
             .alignment(Alignment::Center);
         frame.render_widget(empty, panel_area);
         return;
@@ -609,9 +611,9 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, entry)| {
             let is_selected = i == app.history_selected;
             let style = if is_selected {
-                Style::default().fg(TOKYO_BG).bg(TOKYO_PURPLE).add_modifier(Modifier::BOLD)
+                Style::default().fg(BG_BASE).bg(TOKYO_PURPLE).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(TOKYO_TEXT)
+                Style::default().fg(TOKYO_TEXT).bg(bg_color)
             };
 
             let title = truncate_to_width(&entry.title, 40);
@@ -619,22 +621,25 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
 
             ListItem::new(vec![
                 Line::from(Span::styled(format!("  {} ", title), style)),
-                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT))),
+                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT).bg(bg_color))),
             ])
         })
         .collect();
 
     let list = List::new(items)
         .block(block)
-        .style(Style::default().fg(TOKYO_TEXT));
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
     frame.render_widget(list, panel_area);
 }
 
 fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
     let panel_area = centered_rect(65, 75, area);
+    let bg_color = BG_ELEVATED;
 
-    frame.render_widget(Clear, panel_area);
+    // Fill with elevated background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, panel_area);
 
     // Companion in help header
     let companion = app.mascot.view();
@@ -681,9 +686,9 @@ fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(AZUL_BLUE))
                 .title(format!(" {} help ", companion))
-                .style(Style::default()),
+                .style(Style::default().bg(bg_color)),
         )
-        .style(Style::default().fg(TOKYO_TEXT));
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
     frame.render_widget(help, panel_area);
 }
@@ -767,28 +772,31 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
     out
 }
 
-/// Side panel chat - integrates with main content area (consistent Tokyo Night theme)
+/// Side panel chat - integrates with main content area (Warm Paper theme)
 fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
-    // Clear the area first to avoid artifacts
-    frame.render_widget(Clear, area);
+    let bg_color = BG_SURFACE;  // Same papery feel
 
-    // Consistent Tokyo Night theme colors
-    let border_color = if app.chat_focused { AZUL_BLUE } else { TOKYO_BLUE };
+    // Fill background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, area);
+
+    // Warm Paper theme colors
+    let border_color = if app.chat_focused { BORDER_BRIGHT } else { BORDER_DEFAULT };
     let title = if app.chat_focused { " CHAT " } else { " chat " };
 
-    // Create block with Tokyo Night styling
+    // Create block with Warm Paper styling
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(title, Style::default().fg(AZUL_BLUE)))
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     // Render block first to fill background
     frame.render_widget(block.clone(), area);
 
     if app.chat_session.is_none() {
         let empty = Paragraph::new("Configure AI in settings")
-            .style(Style::default().fg(TOKYO_COMMENT))
+            .style(Style::default().fg(TOKYO_COMMENT).bg(bg_color))
             .alignment(Alignment::Center);
         frame.render_widget(empty, area.inner(Margin { horizontal: 1, vertical: 1 }));
         return;
@@ -902,20 +910,20 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
             .collect();
 
         let msg_para = Paragraph::new(visible)
-            .style(Style::default().fg(TOKYO_TEXT));
+            .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
         frame.render_widget(msg_para, chunks[0]);
     }
 
-    // Input area with Tokyo Night styling
+    // Input area - elevated for focus
     let input_block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(TOKYO_BLUE))
-        .style(Style::default());
+        .border_style(Style::default().fg(BORDER_DEFAULT))
+        .style(Style::default().bg(BG_ELEVATED));
 
-    let input_text = format!("❯ {}_", app.chat_input);
+    let input_text = format!(" ❯ {}_", app.chat_input);
     let input = Paragraph::new(input_text)
         .block(input_block)
-        .style(Style::default().fg(AZUL_BLUE))
+        .style(Style::default().fg(ACCENT_PRIMARY).bg(BG_ELEVATED))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, chunks[1]);
 }
@@ -928,13 +936,17 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
     let panel_area = centered_rect(70, 70, area);
-    frame.render_widget(Clear, panel_area);
+    let bg_color = BG_ELEVATED;
+
+    // Fill with elevated background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, panel_area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_BLUE))
+        .border_style(Style::default().fg(TOKYO_PURPLE))
         .title(" Settings | Esc to close ")
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     let settings_text = vec![
         Line::from(vec![Span::styled("Browser Settings", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD))]),
@@ -993,12 +1005,13 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     let settings = Paragraph::new(lines)
         .block(block)
-        .style(Style::default().fg(TOKYO_TEXT));
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
     frame.render_widget(settings, panel_area);
 }
 
 fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let bg_color = BG_SURFACE;
     // Calculate content area position (same as main content panel: skip 15% links, use 50% content)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1020,7 +1033,10 @@ fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
         .split(main_chunks[2]);
 
     let panel_area = content_split[1];  // Use the content area
-    frame.render_widget(Clear, panel_area);
+
+    // Fill with surface background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, panel_area);
 
     // Loading spinner animation
     let spinner = if app.rag_loading {
@@ -1040,7 +1056,7 @@ fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(AZUL_BLUE))
         .title(title)
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     let inner = panel_area.inner(Margin { horizontal: 1, vertical: 1 });
     let chunks = Layout::default()
@@ -1063,9 +1079,10 @@ fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(input_border_color))
-                .title(" Query "),
+                .title(" Query ")
+                .style(Style::default().bg(BG_ELEVATED)),
         )
-        .style(Style::default().fg(TOKYO_TEXT));
+        .style(Style::default().fg(TOKYO_TEXT).bg(BG_ELEVATED));
 
     frame.render_widget(input, chunks[0]);
 
@@ -1153,9 +1170,10 @@ fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(TOKYO_PURPLE))
-                .title(results_title),
+                .title(results_title)
+                .style(Style::default().bg(bg_color)),
         )
-        .style(Style::default().fg(TOKYO_TEXT))
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(results, chunks[1]);
@@ -1164,13 +1182,17 @@ fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
     let panel_area = centered_rect(70, 70, area);
-    frame.render_widget(Clear, panel_area);
+    let bg_color = BG_ELEVATED;
+
+    // Fill with elevated background first
+    let bg_fill = Block::default().style(Style::default().bg(bg_color));
+    frame.render_widget(bg_fill, panel_area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(TOKYO_BLUE))
+        .border_style(Style::default().fg(TOKYO_CYAN))
         .title(" Memory Graph (mem-layer) | r to refresh | Esc to close ")
-        .style(Style::default());
+        .style(Style::default().bg(bg_color));
 
     let status = if app.memory_client.is_none() {
         vec![Line::from(vec![Span::styled(
@@ -1191,7 +1213,7 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
 
         for (i, node) in app.memory_nodes.iter().enumerate() {
             lines.push(Line::from(vec![
-                Span::styled(format!("{}. ", i + 1), Style::default().fg(TOKYO_ORANGE)),
+                Span::styled(format!("{}. ", i + 1), Style::default().fg(AZUL_BLUE)),
                 Span::styled(node, Style::default().fg(TOKYO_TEXT)),
             ]));
         }
@@ -1201,7 +1223,7 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     let memory = Paragraph::new(status)
         .block(block)
-        .style(Style::default().fg(TOKYO_TEXT))
+        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color))
         .wrap(Wrap { trim: true });
 
     frame.render_widget(memory, panel_area);
