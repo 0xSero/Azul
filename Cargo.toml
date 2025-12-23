@@ -1,6 +1,6 @@
 [package]
 name = "azul-browse"
-version = "3.0.0"
+version = "0.0.7"
 edition = "2021"
 authors = ["Azul Team"]
 description = "A beautiful terminal web browser with AI-powered summaries"

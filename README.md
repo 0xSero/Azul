@@ -1,5 +1,9 @@
 # Azul Browse
 
+[![CI](https://github.com/0xSero/Azul/actions/workflows/ci.yml/badge.svg)](https://github.com/0xSero/Azul/actions/workflows/ci.yml)
+[![Release](https://github.com/0xSero/Azul/actions/workflows/release.yml/badge.svg)](https://github.com/0xSero/Azul/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 ## Features
@@ -20,18 +24,43 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 ## Installation
 
+### From Releases (Recommended)
+
+Download the latest binary for your platform from [Releases](https://github.com/0xSero/Azul/releases):
+
+```bash
+# Linux (x86_64)
+curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-linux-x86_64.tar.gz
+tar xzf azul-linux-x86_64.tar.gz
+sudo mv azul /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-darwin-aarch64.tar.gz
+tar xzf azul-darwin-aarch64.tar.gz
+sudo mv azul /usr/local/bin/
+
+# macOS (Intel)
+curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-darwin-x86_64.tar.gz
+tar xzf azul-darwin-x86_64.tar.gz
+sudo mv azul /usr/local/bin/
+```
+
+### From Source
+
 ```bash
 # Clone the repo
-git clone https://github.com/youruser/azul-browse-rust.git
-cd azul-browse-rust
+git clone https://github.com/0xSero/Azul.git
+cd Azul
 
-# Build release
+# Quick install (uses Makefile)
+make install          # System-wide (/usr/local/bin, requires sudo)
+make install-user     # User-only (~/.local/bin)
+
+# Or manually
 cargo build --release
-
-# Run
 ./target/release/azul
 
-# Or install to PATH
+# Or via cargo
 cargo install --path .
 ```
 
@@ -157,20 +186,48 @@ Example prompts:
 
 ```bash
 # Build debug
-cargo build
+make build            # or: cargo build
 
 # Run with logging
 RUST_LOG=debug cargo run
 
-# Run tests
-cargo test
+# Run all checks (format, lint, test)
+make check
 
-# Check formatting
-cargo fmt --check
+# Individual checks
+make test             # Run tests
+make lint             # Run clippy
+make fmt              # Format code
+make fmt-check        # Check formatting
 
-# Lint
-cargo clippy
+# Clean build artifacts
+make clean
 ```
+
+## Releasing
+
+Releases are automated via GitHub Actions. To create a new release:
+
+```bash
+# 1. Update version (choose one)
+make bump-patch       # 0.0.7 -> 0.0.8
+make bump-minor       # 0.0.7 -> 0.1.0
+make bump-major       # 0.0.7 -> 1.0.0
+
+# 2. Update CHANGELOG.md with changes
+
+# 3. Commit changes
+git add -A
+git commit -m "chore: bump version to $(make version)"
+
+# 4. Create and push tag (triggers release build)
+make release-tag
+```
+
+The GitHub Action will automatically:
+- Build binaries for Linux (x86_64, musl) and macOS (x86_64, ARM64)
+- Create a GitHub Release with the binaries
+- Generate SHA256 checksums
 
 ## Project Structure
 
