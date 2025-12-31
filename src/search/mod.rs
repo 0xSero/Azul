@@ -982,7 +982,7 @@ impl AggregatedSearchResponse {
                         lines.push(format!("   > {}", desc));
                     }
 
-                    lines.push(format!("   🔗 {}", result.url));
+                    lines.push(format!("   -- {}", result.url));
                     lines.push(String::new());
 
                     links.push(Link {
@@ -1099,7 +1099,7 @@ pub fn results_to_page(response: SearchResponse) -> crate::browser::Page {
         lines.push(String::new());
 
         links.push(Link {
-            text: format!("{} — {}", result.title, result.engine),
+            text: format!("{} - {}", result.title, result.engine),
             url: result.url.clone(),
         });
     }

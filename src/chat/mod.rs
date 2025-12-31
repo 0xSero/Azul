@@ -97,9 +97,9 @@ impl ChatSession {
         session.messages.push(ChatMessage::new_assistant(
             "## Azul RAG Assistant\n\n\
              I'm your knowledge assistant with access to:\n\n\
-             - 🔍 **Local RAG** - Your ingested documents & code\n\
-             - 🌐 **Exa Search** - AI-powered web search\n\
-             - 🖥️ **Browser** - Navigate, read pages, follow links\n\n\
+             - **Local RAG** - Your ingested documents & code\n\
+             - **Exa Search** - AI-powered web search\n\
+             - **Browser** - Navigate, read pages, follow links\n\n\
              Ask me anything and I'll search for the best answer!".to_string()
         ));
 

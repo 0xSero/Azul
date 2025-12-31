@@ -44,16 +44,42 @@ pub struct MemoryClient {
 impl MemoryClient {
     /// Create a new memory client
     pub fn new(scope: String) -> Self {
-        let mem_layer_path = which::which("mem-layer")
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "mem-layer".to_string());
+        // Check common locations for mem-layer
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
+        let common_paths = [
+            format!("{home}/.local/bin/mem-layer"),
+            format!("{home}/bin/mem-layer"),
+            "/usr/local/bin/mem-layer".to_string(),
+            "/usr/bin/mem-layer".to_string(),
+            "mem-layer".to_string(), // Fall back to PATH lookup
+        ];
 
-        // Check if mem-layer is available
-        let enabled = Command::new(&mem_layer_path)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let mut mem_layer_path = "mem-layer".to_string();
+        let mut enabled = false;
+
+        // Try each path until one works
+        for path in &common_paths {
+            if let Ok(output) = Command::new(path).arg("--version").output() {
+                if output.status.success() {
+                    mem_layer_path = path.clone();
+                    enabled = true;
+                    break;
+                }
+            }
+        }
+
+        // Also try which as a fallback
+        if !enabled {
+            if let Ok(path) = which::which("mem-layer") {
+                let path_str = path.to_string_lossy().to_string();
+                if let Ok(output) = Command::new(&path_str).arg("--version").output() {
+                    if output.status.success() {
+                        mem_layer_path = path_str;
+                        enabled = true;
+                    }
+                }
+            }
+        }
 
         Self {
             scope,

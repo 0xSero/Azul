@@ -86,9 +86,11 @@ pub struct App {
     pub focus: Focus,
     pub should_quit: bool,
     pub animation_tick: usize,
+    pub focus_pulse_phase: u8,  // 0-255 for smooth focus animation
     pub status_message: String,
     pub view_mode: ViewMode,
     pub format_text: bool,
+    pub zen_mode: bool,
     pub ai_summary: Option<String>,
     pub panel_mode: PanelMode,
 
@@ -172,9 +174,11 @@ impl App {
             focus: Focus::Content,
             should_quit: false,
             animation_tick: 0,
+            focus_pulse_phase: 0,
             status_message: "Ready - / search | t new tab | b bookmarks | c chat | r rag | m memory | ? help".to_string(),
             view_mode: ViewMode::Rendered,
             format_text: true,
+            zen_mode: false,
             ai_summary: None,
             panel_mode: PanelMode::None,  // Chat is always visible, not a panel mode
             tabs: TabManager::new(),
@@ -261,6 +265,8 @@ impl App {
 
     pub fn update(&mut self) {
         self.animation_tick = self.animation_tick.wrapping_add(1);
+        // Smooth focus pulse animation (increment by 8 for visible change each tick)
+        self.focus_pulse_phase = self.focus_pulse_phase.wrapping_add(8);
         self.mascot.tick();
 
         // Check for loaded pages
@@ -306,7 +312,7 @@ impl App {
                     self.mascot.set_state(MascotState::Error);
                     // Also show error in chat so it's visible
                     if let Some(session) = &mut self.chat_session {
-                        session.add_assistant_message(format!("❌ Error: {}", err));
+                        session.add_assistant_message(format!("[!] Error: {}", err));
                         self.chat_scroll = 0;
                     }
                 }
@@ -490,7 +496,9 @@ impl App {
                 self.bookmarks_selected = 0;
                 return Ok(());
             }
-            (KeyCode::Char('H'), KeyModifiers::NONE) => {
+            (KeyCode::Char('H'), KeyModifiers::NONE) if self.focus != Focus::Content => {
+                // H opens history panel (when not in content focus)
+                // In content focus, H is used for go-back navigation
                 self.panel_mode = PanelMode::History;
                 self.refresh_history();
                 self.history_selected = 0;
@@ -558,17 +566,43 @@ impl App {
 
     fn handle_content_keys(&mut self, key: KeyEvent) {
         let scroll = self.scroll_offset();
+        // Approximate visible lines (will be clamped by renderer anyway)
+        let page_size = 30;
+        let half_page = page_size / 2;
 
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match (key.code, key.modifiers) {
+            // Single line scrolling
+            (KeyCode::Up, KeyModifiers::NONE) | (KeyCode::Char('k'), KeyModifiers::NONE) => {
                 if scroll > 0 {
-                    self.set_scroll_offset(scroll - 1);
+                    self.set_scroll_offset(scroll.saturating_sub(1));
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            (KeyCode::Down, KeyModifiers::NONE) | (KeyCode::Char('j'), KeyModifiers::NONE) => {
                 self.set_scroll_offset(scroll + 1);
             }
-            KeyCode::Char('f') => {
+            // Half-page scrolling (vim Ctrl+U/Ctrl+D style)
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+                self.set_scroll_offset(scroll.saturating_sub(half_page));
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                self.set_scroll_offset(scroll + half_page);
+            }
+            // Full page scrolling
+            (KeyCode::PageUp, _) => {
+                self.set_scroll_offset(scroll.saturating_sub(page_size));
+            }
+            (KeyCode::PageDown, _) | (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                // Space bar also scrolls down a page (common in browsers)
+                self.set_scroll_offset(scroll + page_size);
+            }
+            // Fast scroll with Shift+j/k (5 lines at a time)
+            (KeyCode::Char('K'), KeyModifiers::SHIFT) | (KeyCode::Char('K'), KeyModifiers::NONE) => {
+                self.set_scroll_offset(scroll.saturating_sub(5));
+            }
+            (KeyCode::Char('J'), KeyModifiers::SHIFT) | (KeyCode::Char('J'), KeyModifiers::NONE) => {
+                self.set_scroll_offset(scroll + 5);
+            }
+            (KeyCode::Char('f'), KeyModifiers::NONE) => {
                 self.format_text = !self.format_text;
                 self.status_message = if self.format_text {
                     "Text formatting ON".to_string()
@@ -576,7 +610,17 @@ impl App {
                     "Text formatting OFF".to_string()
                 };
             }
-            KeyCode::Char('v') => {
+            (KeyCode::Char('z'), KeyModifiers::NONE) => {
+                self.zen_mode = !self.zen_mode;
+                if self.zen_mode {
+                    self.focus = Focus::Content;
+                    self.chat_focused = false;
+                    self.status_message = "Zen mode ON (z to toggle)".to_string();
+                } else {
+                    self.status_message = "Zen mode OFF".to_string();
+                }
+            }
+            (KeyCode::Char('v'), KeyModifiers::NONE) => {
                 self.view_mode = match self.view_mode {
                     ViewMode::Rendered => ViewMode::Raw,
                     ViewMode::Raw => ViewMode::Rendered,
@@ -587,39 +631,25 @@ impl App {
                 };
                 self.set_scroll_offset(0);
             }
-            KeyCode::Char('s') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if let Err(err) = self.scrape_current_page() {
-                        self.status_message = format!("Scrape error: {}", err);
-                    }
-                } else if let Err(err) = self.request_ai_summary() {
+            (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
+                if let Err(err) = self.scrape_current_page() {
+                    self.status_message = format!("Scrape error: {}", err);
+                }
+            }
+            (KeyCode::Char('s'), KeyModifiers::NONE) => {
+                if let Err(err) = self.request_ai_summary() {
                     self.status_message = format!("AI error: {}", err);
                 }
             }
-            KeyCode::Char('g') => {
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
                 self.set_scroll_offset(0);
             }
-            KeyCode::Char('G') => {
+            (KeyCode::Char('G'), _) => {
                 if let Some(page) = self.current_page() {
                     self.set_scroll_offset(page.content_lines.len().saturating_sub(1));
                 }
             }
-            KeyCode::Char('J') => {
-                // Toggle JavaScript rendering mode
-                if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.render_mode = match tab.render_mode {
-                        RenderMode::Static => RenderMode::Auto,
-                        RenderMode::Auto => RenderMode::JavaScript,
-                        RenderMode::JavaScript => RenderMode::Static,
-                    };
-                    self.status_message = match tab.render_mode {
-                        RenderMode::Static => "JS Mode: OFF (fast HTTP only)".to_string(),
-                        RenderMode::Auto => "JS Mode: AUTO (detect & render if needed)".to_string(),
-                        RenderMode::JavaScript => "JS Mode: ON (always use headless Chrome)".to_string(),
-                    };
-                }
-            }
-            KeyCode::Char('r') => {
+            (KeyCode::Char('r'), KeyModifiers::NONE) => {
                 // Reload current page
                 if let Some(tab) = self.tabs.active_tab() {
                     if !tab.url.is_empty() {
@@ -628,7 +658,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('o') => {
+            (KeyCode::Char('o'), KeyModifiers::NONE) => {
                 // Open current URL in system browser/viewer
                 if let Some(tab) = self.tabs.active_tab() {
                     if !tab.url.is_empty() {
@@ -655,25 +685,31 @@ impl App {
                     }
                 }
             }
-            KeyCode::Left | KeyCode::Char('p') => {
-                // Go back in history
+            (KeyCode::Left, _) | (KeyCode::Char('p'), KeyModifiers::NONE) | (KeyCode::Char('H'), _) => {
+                // Go back in history (H = vim-style back, like :bprev)
                 if let Some(tab) = self.tabs.active_tab_mut() {
                     if let Some(url) = tab.go_back() {
-                        self.url_input = url;
+                        self.url_input = url.clone();
+                        self.status_message = format!("← {}", url);
                         self.navigate_internal(false);
+                    } else {
+                        self.status_message = "No previous page".to_string();
                     }
                 }
             }
-            KeyCode::Right | KeyCode::Char('n') => {
-                // Go forward in history
+            (KeyCode::Right, _) | (KeyCode::Char('n'), KeyModifiers::NONE) | (KeyCode::Char('L'), _) => {
+                // Go forward in history (L = vim-style forward)
                 if let Some(tab) = self.tabs.active_tab_mut() {
                     if let Some(url) = tab.go_forward() {
-                        self.url_input = url;
+                        self.url_input = url.clone();
+                        self.status_message = format!("→ {}", url);
                         self.navigate_internal(false);
+                    } else {
+                        self.status_message = "No next page".to_string();
                     }
                 }
             }
-            KeyCode::Char('2') | KeyCode::F(2) => {
+            (KeyCode::Char('2'), _) | (KeyCode::F(2), _) => {
                 self.focus = Focus::Sidebar;
                 self.update_status();
             }
@@ -1223,7 +1259,7 @@ impl App {
 
                         if !has_exa && !has_rag {
                             let results = vec![
-                                "# ❌ No Results Found".to_string(),
+                                "# No Results Found".to_string(),
                                 String::new(),
                                 "Neither Exa nor RAG returned results for this query.".to_string(),
                                 String::new(),
@@ -1301,24 +1337,24 @@ impl App {
                         let mut results = Vec::new();
 
                         if let Some(synthesis) = llm_response {
-                            results.push(format!("# 🔍 Research: {}", query));
+                            results.push(format!("# Research: {}", query));
                             results.push(String::new());
                             for line in synthesis.lines() {
                                 results.push(line.to_string());
                             }
                         } else {
                             // Fallback: show raw sources if LLM fails
-                            results.push("# 🔍 Search Results (LLM unavailable)".to_string());
+                            results.push("# Search Results (LLM unavailable)".to_string());
                             results.push(String::new());
                             if has_exa {
-                                results.push("## 🌐 Web (Exa)".to_string());
+                                results.push("## Web (Exa)".to_string());
                                 for line in exa_context.lines() {
                                     results.push(line.to_string());
                                 }
                                 results.push(String::new());
                             }
                             if has_rag {
-                                results.push("## 📚 Local (RAG)".to_string());
+                                results.push("## Local (RAG)".to_string());
                                 for line in rag_context.lines() {
                                     results.push(line.to_string());
                                 }
@@ -1394,7 +1430,7 @@ impl App {
 
     fn update_status(&mut self) {
         self.status_message = match self.focus {
-            Focus::Content => "Content - j/k scroll | / search | 2 sidebar | ? help".to_string(),
+            Focus::Content => "Content - j/k scroll | H/L back/fwd | / search | ? help".to_string(),
             Focus::Sidebar => "Sidebar - j/k navigate | Enter open | 1 content".to_string(),
             Focus::URLBar => "URL Bar - Enter go | Esc cancel".to_string(),
             Focus::TabBar => "Tab Bar - h/l switch | x close | Enter select".to_string(),
@@ -2223,7 +2259,7 @@ fn send_chat_message(
         ChatApiResponse::ToolCalls(tool_calls) => {
             // Build a summary of tool calls for display
             let tool_summary: Vec<String> = tool_calls.iter()
-                .map(|tc| format!("⚙ {}", tc.function.name))
+                .map(|tc| format!("@ {}", tc.function.name))
                 .collect();
 
             // Execute tool calls and send results back
@@ -2239,7 +2275,7 @@ fn send_chat_message(
             let mut tool_results: Vec<String> = Vec::new();
             for tool_call in &tool_calls {
                 let result = execute_tool_call(tool_call, &context, tx);
-                tool_results.push(format!("  ↳ {}", result));
+                tool_results.push(format!("  -> {}", result));
                 api_messages.push(OpenAIChatMessage {
                     role: "tool".to_string(),
                     content: Some(result),

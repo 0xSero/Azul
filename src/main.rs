@@ -59,7 +59,7 @@ SEARCH PREFIXES:
 TUI KEYBINDINGS:
     /           Focus URL bar
     Tab         Cycle focus (Content -> Sidebar -> URL Bar)
-    j/k, ↓/↑    Scroll content or navigate links
+    j/k         Scroll content or navigate links
     g/G         Go to top/bottom of content
     Enter       Open selected link (in sidebar)
     1, 2        Focus Content (1) or Sidebar (2)
