@@ -347,10 +347,11 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         // Inner area excluding borders and a small gutter
         let inner = area
             .inner(Margin { horizontal: 1, vertical: 1 })
-            .inner(Margin { horizontal: 2, vertical: 1 });
+            .inner(Margin { horizontal: 1, vertical: 0 });
 
-        // Center a readable column so text doesn't hug the borders on wide terminals
-        let max_column_width: u16 = 92;
+        // Optimal reading column: 66-72 chars for readability (research-backed)
+        // See: https://baymard.com/blog/line-length-readability
+        let max_column_width: u16 = 72;
         let column_width = inner.width.min(max_column_width).max(20);
         let column_x = inner.x + (inner.width.saturating_sub(column_width) / 2);
         let column = Rect {
@@ -1068,53 +1069,60 @@ fn wrap_list_like(raw: &str, marker: &str, text: &str, max_width: usize) -> Vec<
     out
 }
 
-/// Side panel chat - integrates with main content area (Warm Paper theme)
+/// Side panel chat - clean, consistent styling
 fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
-    // Elevated background when focused
-    let bg_color = focused_bg(app.chat_focused);
+    // Consistent background - no change on focus
+    let bg_color = BG_BASE;
 
-    // Fill background first
+    // Fill background
     let bg_fill = Block::default().style(Style::default().bg(bg_color));
     frame.render_widget(bg_fill, area);
 
-    // Pulsing focus color for smooth animation
+    // Border only changes on focus (subtle indicator)
     let border_color = if app.chat_focused {
-        pulsing_focus_color(app.focus_pulse_phase)
+        BORDER_DEFAULT
     } else {
         BORDER_DIM
     };
 
-    // Title style changes with focus
-    let title_style = if app.chat_focused {
-        Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(TEXT_DIM)
-    };
-    let title = if app.chat_focused { " CHAT " } else { " chat " };
+    // Simple title with model name
+    let model_name = app.chat_session.as_ref()
+        .map(|s| {
+            let model = &s.model;
+            model.split('/').last().unwrap_or(model)
+                .split(':').next().unwrap_or(model)
+        })
+        .unwrap_or("chat");
 
-    // Create block with rounded borders and generous padding
+    let title = format!(" {} ", model_name);
+    let title_style = Style::default().fg(TEXT_SECONDARY);
+
+    // Clean block styling
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(2, 2, 1, 1))  // Generous internal padding
+        .padding(Padding::new(1, 1, 0, 0))
         .title(Span::styled(title, title_style))
         .style(Style::default().bg(bg_color));
 
-    // Render block first to fill background
     frame.render_widget(block.clone(), area);
 
     if app.chat_session.is_none() {
-        let empty = Paragraph::new("Press 'c' to start chatting")
+        let tips = vec![
+            Line::from(""),
+            Line::from(Span::styled("Press 'c' to start", Style::default().fg(TEXT_SECONDARY))),
+        ];
+        let empty = Paragraph::new(tips)
             .style(Style::default().fg(TEXT_DIM).bg(bg_color))
             .alignment(Alignment::Center);
-        frame.render_widget(empty, area.inner(Margin { horizontal: 4, vertical: 3 }));
+        frame.render_widget(empty, area.inner(Margin { horizontal: 2, vertical: 2 }));
         return;
     }
 
-    // Generous padding: horizontal 4, vertical 3
-    let inner = area.inner(Margin { horizontal: 4, vertical: 3 });
-    let wrap_width = inner.width.saturating_sub(2).max(20) as usize;
+    // Tighter padding for better space usage
+    let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+    let wrap_width = inner.width.saturating_sub(1).max(20) as usize;
 
     // Calculate input height based on text length (with wrapping)
     let input_len = app.chat_input.len() + 3; // +3 for "> " and "_"
@@ -1130,52 +1138,64 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
         ])
         .split(inner);
 
-    // Render messages with markdown styling
+    // Render messages with enhanced styling
     if let Some(session) = &app.chat_session {
         let mut all_lines: Vec<Line> = Vec::new();
         let md_renderer = StyledMarkdown::new(wrap_width);
+
+        // Define role-specific colors
+        let user_prefix_color = ACCENT_PRIMARY;          // Blue for user
+        let user_text_color = TEXT_PRIMARY;
+        let ai_prefix_color = ACCENT_SUCCESS;            // Green for AI
+        let tool_color = ACCENT_WARNING;                 // Orange for tools
+        let tool_result_color = TEXT_DIM;
 
         for msg in &session.messages {
             match msg.role {
                 crate::chat::Role::System => continue,
                 crate::chat::Role::User => {
-                    // User message - azul blue prefix, strip browser context for display
+                    // User message - compact, same line
                     let display_content = if msg.content.contains("[Browser Context]") {
-                        // Extract just the user's actual message after the context
                         msg.content.split("\n\n").last().unwrap_or(&msg.content).to_string()
                     } else {
                         msg.content.clone()
                     };
+                    // Truncate long user messages
+                    let display = truncate_to_width(&display_content, wrap_width.saturating_sub(3));
                     all_lines.push(Line::from(vec![
-                        Span::styled("> ", Style::default().fg(AZUL_BLUE)),
-                        Span::styled(display_content, Style::default().fg(TOKYO_TEXT)),
+                        Span::styled("› ", Style::default().fg(user_prefix_color)),
+                        Span::styled(display, Style::default().fg(user_text_color)),
                     ]));
-                    all_lines.push(Line::from(""));
                 }
                 crate::chat::Role::Assistant => {
-                    // Check for tool calls in the message
+                    // Tool calls - compact inline
                     if let Some(tool_calls) = &msg.tool_calls {
                         for tc in tool_calls {
                             all_lines.push(Line::from(vec![
-                                Span::styled("@ ", Style::default().fg(TOKYO_ORANGE)),
-                                Span::styled(&tc.name, Style::default().fg(TOKYO_ORANGE)),
+                                Span::styled("  ⚙ ", Style::default().fg(tool_color)),
+                                Span::styled(&tc.name, Style::default().fg(tool_color)),
                             ]));
                         }
                     }
-                    // AI message - render as markdown with green prefix
+                    // AI message - render inline, no separate indicator line
                     if !msg.content.is_empty() {
-                        all_lines.push(Line::from(Span::styled("- ", Style::default().fg(TOKYO_GREEN))));
                         let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
                         let styled = md_renderer.render(&content_lines);
-                        all_lines.extend(styled);
+                        // Add small AI indicator to first line if present
+                        if let Some(first) = styled.first() {
+                            let mut first_spans = vec![Span::styled("  ", Style::default())];
+                            first_spans.extend(first.spans.iter().cloned());
+                            all_lines.push(Line::from(first_spans));
+                            all_lines.extend(styled.into_iter().skip(1));
+                        }
                     }
-                    all_lines.push(Line::from(""));
                 }
                 crate::chat::Role::Tool => {
-                    // Tool result - show minimally
+                    // Tool result - very compact
+                    let result_preview = truncate_to_width(&msg.content, wrap_width.saturating_sub(6));
                     all_lines.push(Line::from(vec![
-                        Span::styled("  -> ", Style::default().fg(TOKYO_COMMENT)),
-                        Span::styled(truncate_to_width(&msg.content, wrap_width.saturating_sub(4)), Style::default().fg(TOKYO_COMMENT)),
+                        Span::styled("    ↳ ", Style::default().fg(tool_result_color)),
+                        Span::styled(result_preview, Style::default().fg(tool_result_color)),
                     ]));
                 }
                 _ => {}
@@ -1225,16 +1245,25 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(msg_para, chunks[0]);
     }
 
-    // Input area - consistent with base theme
+    // Input area - simple, consistent styling
     let input_block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(BORDER_DIM))
         .style(Style::default().bg(BG_BASE));
 
-    let input_text = format!(" > {}_", app.chat_input);
+    // Simple cursor - just show blinking when focused
+    let cursor = if app.chat_focused && (app.animation_tick / 8) % 2 == 0 {
+        "│"
+    } else {
+        " "
+    };
+
+    let input_text = format!(" › {}{}", app.chat_input, cursor);
+
+    // Consistent style - no color change on focus
     let input = Paragraph::new(input_text)
         .block(input_block)
-        .style(Style::default().fg(ACCENT_PRIMARY).bg(BG_BASE))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(BG_BASE))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, chunks[1]);
 }

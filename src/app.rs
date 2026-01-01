@@ -14,6 +14,7 @@ use crate::search::{self, QueryTarget, SearchManager};
 use crate::scrape;
 use crate::storage::{Bookmark, Database, HistoryEntry};
 use crate::tabs::TabManager;
+use crate::ui::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -129,6 +130,9 @@ pub struct App {
     pub memory_client: Option<crate::memory::MemoryClient>,
     pub memory_nodes: Vec<String>,
 
+    // Theme
+    pub theme_manager: ThemeManager,
+
     // Message passing
     page_rx: Receiver<AppMessage>,
     page_tx: Sender<AppMessage>,
@@ -204,6 +208,7 @@ impl App {
             rag_loading: false,
             memory_client,
             memory_nodes: Vec::new(),
+            theme_manager: ThemeManager::new(),
             page_rx,
             page_tx,
             summarizer: Summarizer::from_env().map(Arc::new),
@@ -620,6 +625,16 @@ impl App {
                     self.status_message = "Zen mode OFF".to_string();
                 }
             }
+            // Theme cycling: Ctrl+T cycles themes
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                let theme_name = self.theme_manager.cycle_next();
+                self.status_message = format!("Theme: {} (Ctrl+T to cycle)", theme_name);
+            }
+            // Also T (shift) cycles backwards
+            (KeyCode::Char('T'), _) => {
+                let theme_name = self.theme_manager.cycle_prev();
+                self.status_message = format!("Theme: {} (T to cycle back)", theme_name);
+            }
             (KeyCode::Char('v'), KeyModifiers::NONE) => {
                 self.view_mode = match self.view_mode {
                     ViewMode::Rendered => ViewMode::Raw,
@@ -961,11 +976,35 @@ impl App {
                 self.status_message = format!("Multi-engine search: {}", query);
                 self.mascot.set_state(MascotState::Searching);
 
+                // Clone config for use in thread
+                let config = self.config.clone();
+                let summarizer = self.summarizer.clone();
+
                 std::thread::spawn(move || {
-                    match SearchManager::new() {
+                    // Use config-aware search manager (includes Exa if configured)
+                    match SearchManager::with_config(&config) {
                         Ok(manager) => {
                             let response = manager.search_aggregated(&query);
-                            let page = response.to_page();
+
+                            // Generate AI summary of search results if summarizer available
+                            let ai_summary = if let Some(sum) = &summarizer {
+                                // Convert search results to AI-compatible format
+                                let ai_results: Vec<crate::ai::SearchResult> = response.results.iter().take(10).map(|r| {
+                                    crate::ai::SearchResult {
+                                        title: r.title.clone(),
+                                        url: r.url.clone(),
+                                        description: r.description.clone(),
+                                        source: r.engine.clone(),
+                                    }
+                                }).collect();
+
+                                sum.summarize_search(&query, &ai_results).ok()
+                            } else {
+                                None
+                            };
+
+                            // Build page with optional AI summary at top
+                            let page = response.to_page_with_summary(ai_summary);
                             let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
                         }
                         Err(err) => {

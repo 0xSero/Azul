@@ -213,25 +213,29 @@ impl StyledMarkdown {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn render_h1(&self, text: &str) -> Line<'static> {
-        // H1: Bold uppercase-style with decorative marker
+        // H1: Clean, bold title - truncate to fit
+        let max_width = self.width.saturating_sub(4);
+        let display: String = text.chars().take(max_width).collect();
+
         Line::from(vec![
-            Span::styled("━━ ", Style::default().fg(HEADER_PRIMARY)),
             Span::styled(
-                text.to_uppercase(),
+                display.to_uppercase(),
                 Style::default()
                     .fg(HEADER_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" ━━", Style::default().fg(HEADER_PRIMARY)),
         ])
     }
 
     fn render_h2(&self, text: &str) -> Line<'static> {
-        // H2: Clear section marker
+        // H2: Section header with subtle marker
+        let max_width = self.width.saturating_sub(4);
+        let display: String = text.chars().take(max_width).collect();
+
         Line::from(vec![
-            Span::styled("── ", Style::default().fg(HEADER_SECONDARY)),
+            Span::styled("─ ", Style::default().fg(HEADER_SECONDARY)),
             Span::styled(
-                text.to_string(),
+                display,
                 Style::default()
                     .fg(HEADER_SECONDARY)
                     .add_modifier(Modifier::BOLD),
@@ -240,12 +244,14 @@ impl StyledMarkdown {
     }
 
     fn render_h3(&self, text: &str) -> Line<'static> {
-        // H3: Subtle subsection
+        // H3: Subsection
+        let max_width = self.width.saturating_sub(4);
+        let display: String = text.chars().take(max_width).collect();
+
         Line::from(vec![
-            Span::styled("   ", Style::default()),
-            Span::styled("▸ ", Style::default().fg(HEADER_TERTIARY)),
+            Span::styled("  ", Style::default()),
             Span::styled(
-                text.to_string(),
+                display,
                 Style::default()
                     .fg(HEADER_TERTIARY)
                     .add_modifier(Modifier::BOLD),
@@ -254,12 +260,15 @@ impl StyledMarkdown {
     }
 
     fn render_h4(&self, text: &str) -> Line<'static> {
-        // H4: Minor heading
+        // H4: Minor heading - just bold
+        let max_width = self.width.saturating_sub(4);
+        let display: String = text.chars().take(max_width).collect();
+
         Line::from(vec![
-            Span::styled("     ", Style::default()),
+            Span::styled("  ", Style::default()),
             Span::styled(
-                text.to_string(),
-                Style::default().fg(TEXT_BODY).add_modifier(Modifier::BOLD).add_modifier(Modifier::UNDERLINED),
+                display,
+                Style::default().fg(TEXT_BODY).add_modifier(Modifier::BOLD),
             ),
         ])
     }
@@ -281,11 +290,15 @@ impl StyledMarkdown {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn render_quote(&self, text: &str) -> Line<'static> {
+        // Truncate quote text to fit width minus the prefix
+        let max_quote_width = self.width.saturating_sub(6);
+        let display_text: String = text.chars().take(max_quote_width).collect();
+
         Line::from(vec![
-            Span::styled("   ", Style::default()),
-            Span::styled("| ", Style::default().fg(ACCENT_QUOTE)),
+            Span::styled("  ", Style::default()),
+            Span::styled("│ ", Style::default().fg(ACCENT_QUOTE)),
             Span::styled(
-                text.to_string(),
+                display_text,
                 Style::default().fg(TEXT_MUTED).add_modifier(Modifier::ITALIC),
             ),
         ])
@@ -296,29 +309,39 @@ impl StyledMarkdown {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn render_bullet(&self, text: &str, level: usize) -> Line<'static> {
-        let indent = "    ".repeat(level);  // 4 spaces per level
+        let indent = "  ".repeat(level);  // 2 spaces per level (tighter)
         let bullet = match level {
-            0 => "-",
-            1 => "*",
-            _ => "+",
+            0 => "•",
+            1 => "◦",
+            _ => "▪",
         };
 
+        // Calculate available width for text
+        let prefix_len = 4 + (level * 2);
+        let max_text_width = self.width.saturating_sub(prefix_len);
+        let display_text: String = text.chars().take(max_text_width).collect();
+
         let mut spans = vec![
-            Span::styled(format!("   {}", indent), Style::default()),
+            Span::styled(format!("  {}", indent), Style::default()),
             Span::styled(format!("{} ", bullet), Style::default().fg(ACCENT_LIST)),
         ];
-        spans.extend(self.parse_inline(text));
+        spans.extend(self.parse_inline(&display_text));
         Line::from(spans)
     }
 
     fn render_number(&self, num: &str, text: &str, level: usize) -> Line<'static> {
-        let indent = "    ".repeat(level);
+        let indent = "  ".repeat(level);
+
+        // Calculate available width for text
+        let prefix_len = 4 + (level * 2) + num.len() + 2;
+        let max_text_width = self.width.saturating_sub(prefix_len);
+        let display_text: String = text.chars().take(max_text_width).collect();
 
         let mut spans = vec![
-            Span::styled(format!("   {}", indent), Style::default()),
+            Span::styled(format!("  {}", indent), Style::default()),
             Span::styled(format!("{}. ", num), Style::default().fg(ACCENT_LIST)),
         ];
-        spans.extend(self.parse_inline(text));
+        spans.extend(self.parse_inline(&display_text));
         Line::from(spans)
     }
 
@@ -385,40 +408,43 @@ impl StyledMarkdown {
 
     fn render_think_block(&self, lines: &[String]) -> Vec<Line<'static>> {
         let mut result = Vec::new();
-        let think_border = Color::Rgb(88, 88, 110);   // Muted purple-gray
-        let think_text = Color::Rgb(140, 140, 170);   // Dim text for thinking
-        let think_bg = Color::Rgb(20, 20, 25);        // Slightly different bg
+        let think_border = Color::Rgb(70, 70, 85);    // Subtle border
+        let think_text = Color::Rgb(120, 120, 140);   // Dim text for thinking
 
-        // Header
+        // Calculate available width for content (minus border chars)
+        let content_width = self.width.saturating_sub(8).max(10);
+        let border_width = self.width.saturating_sub(6).min(40);
+
+        // Header - simple and short
         result.push(Line::from(vec![
-            Span::styled("   ", Style::default()),
-            Span::styled("╭─ ", Style::default().fg(think_border)),
+            Span::styled("  ╭─ ", Style::default().fg(think_border)),
             Span::styled("thinking", Style::default().fg(think_border).add_modifier(Modifier::ITALIC)),
-            Span::styled(" ─".to_string() + &"─".repeat(self.width.saturating_sub(20).min(50)), Style::default().fg(think_border)),
+            Span::styled(" ".to_string() + &"─".repeat(border_width.saturating_sub(12)), Style::default().fg(think_border)),
         ]));
 
-        // Think content with left border
+        // Think content with left border - truncate each line
         for line in lines {
             if line.trim().is_empty() {
                 result.push(Line::from(vec![
-                    Span::styled("   │", Style::default().fg(think_border)),
+                    Span::styled("  │", Style::default().fg(think_border)),
                 ]));
             } else {
+                // Truncate line to fit width
+                let truncated: String = line.chars().take(content_width).collect();
                 result.push(Line::from(vec![
-                    Span::styled("   │ ", Style::default().fg(think_border)),
+                    Span::styled("  │ ", Style::default().fg(think_border)),
                     Span::styled(
-                        line.clone(),
+                        truncated,
                         Style::default().fg(think_text).add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }
         }
 
-        // Footer
+        // Footer - match header width
         result.push(Line::from(vec![
-            Span::styled("   ", Style::default()),
-            Span::styled("╰", Style::default().fg(think_border)),
-            Span::styled("─".repeat(self.width.saturating_sub(8).min(60)), Style::default().fg(think_border)),
+            Span::styled("  ╰", Style::default().fg(think_border)),
+            Span::styled("─".repeat(border_width), Style::default().fg(think_border)),
         ]));
 
         result
@@ -429,13 +455,21 @@ impl StyledMarkdown {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn render_paragraph(&self, text: &str) -> Line<'static> {
-        // Consistent left margin for body text, while respecting input indentation
-        // (used for wrapped list continuations, nested blocks, etc.)
+        // Clean left margin - minimal indent for body text
         let extra_indent = (text.len() - text.trim_start().len()).min(MAX_EXTRA_INDENT);
-        let prefix = format!("{}{}", INDENT, " ".repeat(extra_indent));
+        let prefix = format!("  {}", " ".repeat(extra_indent));
+
+        // Truncate text to fit width (will be wrapped by format_lines)
+        let max_text_width = self.width.saturating_sub(prefix.len() + 1);
+        let trimmed = text.trim_start();
+        let display_text: String = if trimmed.chars().count() > max_text_width {
+            trimmed.chars().take(max_text_width).collect()
+        } else {
+            trimmed.to_string()
+        };
 
         let mut spans = vec![Span::styled(prefix, Style::default())];
-        spans.extend(self.parse_inline(text.trim_start()));
+        spans.extend(self.parse_inline(&display_text));
         Line::from(spans)
     }
 

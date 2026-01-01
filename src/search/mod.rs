@@ -12,6 +12,7 @@ pub enum EngineType {
     Scholar,
     PubMed,
     OpenLibrary,
+    Exa, // AI-powered semantic search
 }
 
 impl EngineType {
@@ -24,6 +25,7 @@ impl EngineType {
             EngineType::Scholar => "Google Scholar",
             EngineType::PubMed => "PubMed",
             EngineType::OpenLibrary => "OpenLibrary",
+            EngineType::Exa => "Exa",
         }
     }
 
@@ -36,6 +38,7 @@ impl EngineType {
             EngineType::Scholar => "Scholarly articles and citations",
             EngineType::PubMed => "Biomedical literature and research",
             EngineType::OpenLibrary => "Books and manuscripts",
+            EngineType::Exa => "AI-powered semantic search",
         }
     }
 
@@ -48,6 +51,7 @@ impl EngineType {
             EngineType::Scholar => "s:",
             EngineType::PubMed => "p:",
             EngineType::OpenLibrary => "ol:",
+            EngineType::Exa => "e:",
         }
     }
 
@@ -61,6 +65,7 @@ impl EngineType {
             "s:" => Some(EngineType::Scholar),
             "p:" => Some(EngineType::PubMed),
             "ol:" => Some(EngineType::OpenLibrary),
+            "e:" | "exa:" => Some(EngineType::Exa),
             _ => None,
         }
     }
@@ -817,6 +822,136 @@ impl SearchEngine for OpenLibraryEngine {
     }
 }
 
+// === Exa Search ===
+// AI-powered semantic search with highlights and summaries
+
+pub struct ExaEngine {
+    client: SearchClient,
+    api_key: String,
+}
+
+impl ExaEngine {
+    pub fn new(api_key: String) -> Result<Self> {
+        Ok(Self {
+            client: SearchClient::new()?,
+            api_key,
+        })
+    }
+
+    pub fn from_config(config: &crate::config::Config) -> Option<Self> {
+        let api_key = config.get_exa_api_key()?;
+        if api_key.is_empty() {
+            return None;
+        }
+        Self::new(api_key).ok()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ExaResponse {
+    results: Option<Vec<ExaResult>>,
+    #[serde(rename = "autopromptString")]
+    autoprompt_string: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExaResult {
+    title: Option<String>,
+    url: String,
+    #[serde(rename = "publishedDate")]
+    published_date: Option<String>,
+    author: Option<String>,
+    text: Option<String>,
+    highlights: Option<Vec<String>>,
+    #[serde(rename = "highlightScores")]
+    highlight_scores: Option<Vec<f64>>,
+    summary: Option<String>,
+}
+
+impl SearchEngine for ExaEngine {
+    fn search(&self, query: &str) -> Result<SearchResponse> {
+        let url = "https://api.exa.ai/search";
+
+        // Build request body for Exa API
+        let body = serde_json::json!({
+            "query": query,
+            "type": "neural",
+            "useAutoprompt": true,
+            "numResults": 10,
+            "contents": {
+                "text": { "maxCharacters": 500 },
+                "highlights": { "numSentences": 2 },
+                "summary": { "query": query }
+            }
+        });
+
+        let response = reqwest::blocking::Client::new()
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("x-api-key", &self.api_key)
+            .json(&body)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .context("Failed to send Exa request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Exa API error {}: {}", status, text);
+        }
+
+        let exa_resp: ExaResponse = response.json()
+            .context("Failed to parse Exa response")?;
+
+        let results = exa_resp
+            .results
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| {
+                // Build description from highlights, summary, or text
+                let description = if let Some(highlights) = &r.highlights {
+                    if !highlights.is_empty() {
+                        highlights.join(" ... ")
+                    } else if let Some(summary) = &r.summary {
+                        summary.clone()
+                    } else {
+                        r.text.clone().unwrap_or_default()
+                    }
+                } else if let Some(summary) = &r.summary {
+                    summary.clone()
+                } else {
+                    r.text.clone().unwrap_or_default()
+                };
+
+                // Truncate description if too long
+                let description = if description.chars().count() > 300 {
+                    format!("{}...", description.chars().take(300).collect::<String>())
+                } else {
+                    description
+                };
+
+                SearchResult {
+                    title: r.title.unwrap_or_else(|| "Untitled".to_string()),
+                    url: r.url,
+                    description,
+                    engine: "Exa".to_string(),
+                }
+            })
+            .collect();
+
+        Ok(SearchResponse {
+            query: query.to_string(),
+            engine: EngineType::Exa,
+            results,
+            total: 0,
+        })
+    }
+
+    fn engine_type(&self) -> EngineType {
+        EngineType::Exa
+    }
+}
+
 // === Search Manager ===
 
 /// Manages multiple search engines
@@ -837,10 +972,36 @@ impl SearchManager {
         engines.insert(EngineType::PubMed, Box::new(PubMedEngine::new()?));
         engines.insert(EngineType::OpenLibrary, Box::new(OpenLibraryEngine::new()?));
 
+        // Try to add Exa from environment
+        if let Ok(api_key) = std::env::var("EXA_API_KEY") {
+            if !api_key.is_empty() {
+                if let Ok(exa) = ExaEngine::new(api_key) {
+                    engines.insert(EngineType::Exa, Box::new(exa));
+                }
+            }
+        }
+
         Ok(Self {
             engines,
             selected: EngineType::DuckDuckGo,
         })
+    }
+
+    /// Create SearchManager with config (includes Exa if configured)
+    pub fn with_config(config: &crate::config::Config) -> Result<Self> {
+        let mut manager = Self::new()?;
+
+        // Add Exa if configured
+        if let Some(exa) = ExaEngine::from_config(config) {
+            manager.engines.insert(EngineType::Exa, Box::new(exa));
+        }
+
+        Ok(manager)
+    }
+
+    /// Check if Exa is available
+    pub fn has_exa(&self) -> bool {
+        self.engines.contains_key(&EngineType::Exa)
     }
 
     pub fn set_engine(&mut self, engine: EngineType) -> bool {
@@ -880,8 +1041,9 @@ impl SearchManager {
         let mut engine_results: std::collections::HashMap<EngineType, Vec<SearchResult>> =
             std::collections::HashMap::new();
 
-        // Define the order of engines for display
+        // Define the order of engines for display (Exa first if available)
         let engine_order = [
+            EngineType::Exa,          // AI semantic search (if configured)
             EngineType::Wikipedia,
             EngineType::ArXiv,
             EngineType::Scholar,
@@ -934,23 +1096,40 @@ pub struct AggregatedSearchResponse {
 impl AggregatedSearchResponse {
     /// Convert to a display Page with engine grouping
     pub fn to_page(&self) -> crate::browser::Page {
+        self.to_page_with_summary(None)
+    }
+
+    /// Convert to a display Page with optional AI summary at the top
+    pub fn to_page_with_summary(&self, ai_summary: Option<String>) -> crate::browser::Page {
         use crate::browser::{Link, Page};
 
         let mut lines = vec![
             format!("# Multi-Engine Search: \"{}\"", self.query),
             String::new(),
-            format!("Found {} results across {} engines",
-                    self.results.len(),
-                    self.results_by_engine.len()),
-            String::new(),
-            "---".to_string(),
-            String::new(),
         ];
+
+        // Add AI summary at top if available
+        if let Some(summary) = ai_summary {
+            lines.push("## AI Summary".to_string());
+            lines.push(String::new());
+            lines.push(format!("> {}", summary));
+            lines.push(String::new());
+            lines.push("---".to_string());
+            lines.push(String::new());
+        }
+
+        lines.push(format!("Found {} results across {} engines",
+                self.results.len(),
+                self.results_by_engine.len()));
+        lines.push(String::new());
+        lines.push("---".to_string());
+        lines.push(String::new());
 
         let mut links = Vec::new();
 
-        // Display results grouped by engine
+        // Display results grouped by engine (Exa first if present)
         let engine_order = [
+            EngineType::Exa,
             EngineType::Wikipedia,
             EngineType::ArXiv,
             EngineType::Scholar,
@@ -1022,7 +1201,7 @@ fn html_to_text(html: &str) -> String {
 
 /// Parse query to detect engine prefix
 pub fn parse_query(input: &str) -> (Option<EngineType>, String) {
-    let prefixes = ["d:", "g:", "w:", "a:", "s:", "p:", "ol:"];
+    let prefixes = ["exa:", "e:", "d:", "g:", "w:", "a:", "s:", "p:", "ol:"];
 
     for prefix in &prefixes {
         if input.to_lowercase().starts_with(prefix) {

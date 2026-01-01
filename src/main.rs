@@ -45,6 +45,7 @@ OPTIONS:
     -v, --version          Show version
 
 SEARCH PREFIXES:
+    e:<query>    Exa AI semantic search (requires EXA_API_KEY)
     w:<query>    Wikipedia search
     a:<query>    arXiv search (academic papers)
     s:<query>    Google Scholar search
@@ -53,16 +54,23 @@ SEARCH PREFIXES:
     p:<query>    PubMed search (medical)
     ol:<query>   OpenLibrary search (books)
 
-    Without prefix, searches DuckDuckGo by default.
+    Without prefix, performs multi-engine search across all sources.
     Direct URLs (containing '.' without spaces) go directly to the site.
 
 TUI KEYBINDINGS:
     /           Focus URL bar
     Tab         Cycle focus (Content -> Sidebar -> URL Bar)
     j/k         Scroll content or navigate links
+    J/K         Fast scroll (5 lines)
+    Ctrl+U/D    Half page scroll
     g/G         Go to top/bottom of content
+    H/L         Navigate back/forward
     Enter       Open selected link (in sidebar)
-    1, 2        Focus Content (1) or Sidebar (2)
+    1, 2, 3     Focus Content (1), Sidebar (2), Chat (3)
+    c           Focus chat panel
+    Ctrl+T      Cycle theme forward
+    T           Cycle theme backward
+    z           Toggle zen mode
     ?           Toggle help
     q, Ctrl+C   Quit
 
@@ -76,6 +84,7 @@ EXAMPLES:
 
 ENVIRONMENT VARIABLES:
     OPENROUTER_API_KEY    API key for AI summaries (optional)
+    EXA_API_KEY           API key for Exa semantic search (optional)
 "#,
         VERSION
     );
@@ -213,13 +222,19 @@ fn run_app<B: ratatui::backend::Backend>(
 }
 
 /// CLI mode - fetch a URL or search query and display results
+/// Enhanced with AI summaries and Exa integration
 fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
-    println!("Azul CLI Mode v{}", VERSION);
+    use ai::Summarizer;
+
+    println!("╭─────────────────────────────────────────────────────────────╮");
+    println!("│  Azul Browser v{} - Headless Mode                         │", VERSION);
+    println!("╰─────────────────────────────────────────────────────────────╯");
+    println!();
     println!("Query: {}", query);
     if js_mode {
         println!("Mode: JavaScript rendering (headless Chrome)");
     }
-    println!("---");
+    println!();
 
     let render_mode = if js_mode {
         RenderMode::JavaScript
@@ -227,33 +242,114 @@ fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
         RenderMode::Static
     };
 
+    // Load config for Exa and AI features
+    let config = config::Config::load().unwrap_or_default();
+    let summarizer = Summarizer::from_config(&config);
+
     match search::classify_query(query) {
         QueryTarget::Url(url) => {
-            println!("Fetching{}: {}", if js_mode { " [JS]" } else { "" }, url);
+            println!("━━━ Fetching{} ━━━", if js_mode { " [JS]" } else { "" });
+            println!("{}", url);
             println!();
 
             let browser = Browser::new().context("Failed to create browser")?;
             let page = browser.fetch_with_mode(&url, render_mode).context("Failed to fetch page")?;
 
+            // Generate AI summary if available
+            if let Some(ref sum) = summarizer {
+                println!("━━━ AI Summary ━━━");
+                let content = page.content_lines.join("\n");
+                match sum.summarize_page(&page.title, &page.url, &content) {
+                    Ok(summary) => {
+                        println!("{}", summary);
+                        println!();
+                    }
+                    Err(e) => {
+                        println!("(Summary unavailable: {})", e);
+                        println!();
+                    }
+                }
+            }
+
             print_page(&page);
         }
         QueryTarget::Search { engine, query } => {
-            println!("Searching {} for: {}", engine.name(), query);
+            println!("━━━ {} Search ━━━", engine.name());
+            println!("\"{}\"", query);
             println!();
 
-            let response = SearchManager::new()
+            // Use config-aware search manager (includes Exa if configured)
+            let response = SearchManager::with_config(&config)
                 .and_then(|manager| manager.search_with(engine, &query))
                 .context("Search failed")?;
+
+            // Generate AI summary of search results
+            if let Some(ref sum) = summarizer {
+                let ai_results: Vec<ai::SearchResult> = response.results.iter().take(10).map(|r| {
+                    ai::SearchResult {
+                        title: r.title.clone(),
+                        url: r.url.clone(),
+                        description: r.description.clone(),
+                        source: r.engine.clone(),
+                    }
+                }).collect();
+
+                if !ai_results.is_empty() {
+                    println!("━━━ AI Summary ━━━");
+                    match sum.summarize_search(&query, &ai_results) {
+                        Ok(summary) => {
+                            println!("{}", summary);
+                            println!();
+                        }
+                        Err(e) => {
+                            println!("(Summary unavailable: {})", e);
+                            println!();
+                        }
+                    }
+                }
+            }
 
             let page = search::results_to_page(response);
             print_page(&page);
         }
         QueryTarget::MultiSearch { query } => {
-            println!("Multi-engine search for: {}", query);
+            // Use config-aware search manager (includes Exa if configured)
+            let manager = SearchManager::with_config(&config)
+                .context("Search manager init failed")?;
+
+            let exa_status = if manager.has_exa() { " + Exa" } else { "" };
+            println!("━━━ Multi-Engine Search{} ━━━", exa_status);
+            println!("\"{}\"", query);
             println!();
 
-            let manager = SearchManager::new().context("Search manager init failed")?;
             let response = manager.search_aggregated(&query);
+
+            // Generate AI summary of search results
+            if let Some(ref sum) = summarizer {
+                let ai_results: Vec<ai::SearchResult> = response.results.iter().take(10).map(|r| {
+                    ai::SearchResult {
+                        title: r.title.clone(),
+                        url: r.url.clone(),
+                        description: r.description.clone(),
+                        source: r.engine.clone(),
+                    }
+                }).collect();
+
+                if !ai_results.is_empty() {
+                    println!("━━━ AI Summary ━━━");
+                    match sum.summarize_search(&query, &ai_results) {
+                        Ok(summary) => {
+                            println!("{}", summary);
+                            println!();
+                        }
+                        Err(e) => {
+                            println!("(Summary unavailable: {})", e);
+                            println!();
+                        }
+                    }
+                }
+            }
+
             let page = response.to_page();
             print_page(&page);
         }
