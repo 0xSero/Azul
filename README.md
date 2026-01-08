@@ -9,11 +9,12 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 ## Features
 
 - Full TUI web browsing with keyboard navigation
-- AI chat panel with tool-calling support (navigate, scroll, follow links)
+- Calm 2-pane layout (links + content) with focus mode
+- AI chat panel (hidden by default) with tool-calling support
 - Multi-engine search (DuckDuckGo, Wikipedia, arXiv, PubMed, Google Scholar, OpenLibrary)
 - JavaScript rendering via headless Chrome
 - Bookmarks and history
-- Cosmic dark theme
+- Theme presets with warm defaults
 - Tab support
 - RAG integration (optional)
 
@@ -101,6 +102,12 @@ Config file location: `~/.config/azul/config.json`
     "model": "anthropic/claude-3.5-sonnet",
     "base_url": "https://openrouter.ai/api/v1"
   },
+  "ui": {
+    "panes": {
+      "sidebar_width": 26,
+      "focus_mode": false
+    }
+  },
   "refresh_rate_ms": 200,
   "rag_base_url": "http://127.0.0.1:3002",
   "memory_scope": "azul-browse"
@@ -125,21 +132,31 @@ The browser supports OpenAI-compatible APIs:
 |-----|--------|
 | `q`, `Ctrl+C` | Quit |
 | `?` | Toggle help |
-| `Tab` | Cycle focus (Content -> Chat -> URL) |
+| `Tab` | Cycle focus (Content -> Sidebar -> URL) |
 | `Shift+Tab` | Reverse cycle |
 | `/` | Focus URL bar |
-| `Escape` | Cancel/unfocus |
+| `Escape` | Close panels / exit chat |
+| `c` | Open chat panel |
+| `z` | Toggle focus mode |
+| `1` | Focus links |
+| `2` | Focus content |
+| `3` | Focus chat |
 
 ### Content Navigation
 | Key | Action |
 |-----|--------|
 | `j` / `Down` | Scroll down |
 | `k` / `Up` | Scroll up |
+| `J` | Scroll down 5 lines |
+| `K` | Scroll up 5 lines |
+| `Ctrl+D` | Half page down |
+| `Ctrl+U` | Half page up |
+| `Space` / `PageDown` | Page down |
 | `g` | Go to top |
 | `G` | Go to bottom |
-| `Tab` (in content) | Next link |
-| `Enter` | Follow selected link |
-| `1-9` | Follow link by number |
+| `H` / `L` | Back / forward |
+| `v` | Toggle raw view |
+| `f` | Toggle text reflow |
 
 ### Chat Panel
 | Key | Action |
@@ -147,6 +164,7 @@ The browser supports OpenAI-compatible APIs:
 | `Up` / `PageUp` | Scroll up (older messages) |
 | `Down` / `PageDown` | Scroll down (newer messages) |
 | `Enter` | Send message |
+| `Escape` | Close chat |
 | Type | Input text |
 
 ### URL Bar
@@ -167,7 +185,7 @@ The browser supports OpenAI-compatible APIs:
 | `p:` | PubMed (medical) |
 | `ol:` | OpenLibrary (books) |
 
-No prefix defaults to DuckDuckGo. URLs (containing `.`) go directly to the site.
+No prefix runs multi-engine search. URLs (containing `.`) go directly to the site.
 
 ## AI Chat
 

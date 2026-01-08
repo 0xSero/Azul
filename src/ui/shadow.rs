@@ -11,8 +11,8 @@ use ratatui::{
 };
 
 /// Shadow colors for depth effect (matching OpenCode-inspired theme)
-pub const SHADOW_DARK: Color = Color::Rgb(10, 10, 12);   // Deep shadow (bottom-right) #0a0a0c
-pub const SHADOW_MID: Color = Color::Rgb(14, 14, 16);    // Medium shadow (transition) #0e0e10
+pub const SHADOW_DARK: Color = Color::Rgb(10, 10, 12); // Deep shadow (bottom-right) #0a0a0c
+pub const SHADOW_MID: Color = Color::Rgb(14, 14, 16); // Medium shadow (transition) #0e0e10
 
 /// A border widget that creates depth through asymmetric coloring.
 /// Top/left edges use the light color, bottom/right use shadow colors.
@@ -120,11 +120,13 @@ impl Widget for ShadowBorder {
         }
         if let Some(cell) = buf.cell_mut((x0 + w - 1, y0)) {
             // Top-right: transition - use mid tone
-            cell.set_symbol(tr).set_style(Style::default().fg(SHADOW_MID));
+            cell.set_symbol(tr)
+                .set_style(Style::default().fg(SHADOW_MID));
         }
         if let Some(cell) = buf.cell_mut((x0, y0 + h - 1)) {
             // Bottom-left: transition - use mid tone
-            cell.set_symbol(bl).set_style(Style::default().fg(SHADOW_MID));
+            cell.set_symbol(bl)
+                .set_style(Style::default().fg(SHADOW_MID));
         }
         if let Some(cell) = buf.cell_mut((x0 + w - 1, y0 + h - 1)) {
             cell.set_symbol(br).set_style(shadow_style);

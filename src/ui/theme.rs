@@ -8,9 +8,9 @@ use ratatui::style::Color;
 /// Available theme presets
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemePreset {
-    WarmPaperDark,   // Default - Rich charcoal with warm tones
-    WarmPaperLight,  // Cream/paper aesthetic
-    AzulClassic,     // Original Tokyo Night based
+    WarmPaperDark,  // Default - Rich charcoal with warm tones
+    WarmPaperLight, // Cream/paper aesthetic
+    AzulClassic,    // Original Tokyo Night based
     Monokai,
     Gruvbox,
     Nord,
@@ -83,8 +83,8 @@ pub struct ThemeColors {
 
     // Background colors
     pub bg: Color,
-    pub bg_secondary: Color,  // Cards, elevated surfaces
-    pub bg_highlight: Color,  // Hover states
+    pub bg_secondary: Color, // Cards, elevated surfaces
+    pub bg_highlight: Color, // Hover states
 
     // Border colors
     pub border: Color,
@@ -116,36 +116,36 @@ impl ThemeColors {
     fn warm_paper_dark() -> Self {
         Self {
             // Primary accent - warm tan/brown tones hsl(35, 25%, 50%)
-            primary: Color::Rgb(159, 138, 96),         // Warm tan accent
+            primary: Color::Rgb(159, 138, 96), // Warm tan accent
             primary_bright: Color::Rgb(194, 169, 118), // Lighter tan
-            primary_dim: Color::Rgb(128, 111, 77),     // Darker tan
+            primary_dim: Color::Rgb(128, 111, 77), // Darker tan
 
             // Secondary - slightly cooler warm tone
-            secondary: Color::Rgb(168, 142, 122),      // Warm taupe
-            tertiary: Color::Rgb(179, 161, 116),       // Soft gold
+            secondary: Color::Rgb(168, 142, 122), // Warm taupe
+            tertiary: Color::Rgb(179, 161, 116),  // Soft gold
 
             // Semantic - muted, warm versions
-            success: Color::Rgb(134, 156, 118),        // Muted sage green
-            warning: Color::Rgb(199, 163, 104),        // Warm amber
-            error: Color::Rgb(186, 120, 110),          // Muted terracotta
-            info: Color::Rgb(138, 157, 168),           // Warm slate blue
+            success: Color::Rgb(134, 156, 118), // Muted sage green
+            warning: Color::Rgb(199, 163, 104), // Warm amber
+            error: Color::Rgb(186, 120, 110),   // Muted terracotta
+            info: Color::Rgb(138, 157, 168),    // Warm slate blue
 
             // Text - warm off-white hsl(40, 20%, 92%)
-            text: Color::Rgb(240, 236, 224),           // Warm cream white
-            text_dim: Color::Rgb(204, 198, 183),       // Dimmed cream
-            text_muted: Color::Rgb(145, 140, 130),     // Muted warm gray
+            text: Color::Rgb(240, 236, 224),       // Warm cream white
+            text_dim: Color::Rgb(204, 198, 183),   // Dimmed cream
+            text_muted: Color::Rgb(145, 140, 130), // Muted warm gray
 
             // Background - rich charcoal hsl(30, 5%, 10.5%)
-            bg: Color::Rgb(27, 27, 27),                // #1b1b1b
-            bg_secondary: Color::Rgb(30, 30, 30),      // #1e1e1e - cards
-            bg_highlight: Color::Rgb(42, 40, 38),      // Hover highlight
+            bg: Color::Rgb(27, 27, 27),           // #1b1b1b
+            bg_secondary: Color::Rgb(30, 30, 30), // #1e1e1e - cards
+            bg_highlight: Color::Rgb(42, 40, 38), // Hover highlight
 
             // Borders - subtle warm gray
-            border: Color::Rgb(51, 49, 47),            // hsl(30, 5%, 20%)
-            border_active: Color::Rgb(96, 88, 77),     // Warmer active border
+            border: Color::Rgb(51, 49, 47),        // hsl(30, 5%, 20%)
+            border_active: Color::Rgb(96, 88, 77), // Warmer active border
 
             // Focus ring - warm brown
-            focus_ring: Color::Rgb(143, 124, 97),      // hsl(35, 15%, 70%)
+            focus_ring: Color::Rgb(143, 124, 97), // hsl(35, 15%, 70%)
         }
     }
 
@@ -156,36 +156,36 @@ impl ThemeColors {
     fn warm_paper_light() -> Self {
         Self {
             // Primary accent - deeper warm tones for contrast
-            primary: Color::Rgb(128, 107, 77),         // Deep warm tan
-            primary_bright: Color::Rgb(156, 132, 96),  // Medium tan
-            primary_dim: Color::Rgb(102, 85, 61),      // Dark brown
+            primary: Color::Rgb(128, 107, 77), // Deep warm tan
+            primary_bright: Color::Rgb(156, 132, 96), // Medium tan
+            primary_dim: Color::Rgb(102, 85, 61), // Dark brown
 
             // Secondary tones
-            secondary: Color::Rgb(138, 112, 92),       // Warm brown
-            tertiary: Color::Rgb(143, 128, 89),        // Olive tan
+            secondary: Color::Rgb(138, 112, 92), // Warm brown
+            tertiary: Color::Rgb(143, 128, 89),  // Olive tan
 
             // Semantic - slightly more vibrant for light mode visibility
-            success: Color::Rgb(92, 128, 82),          // Olive green
-            warning: Color::Rgb(176, 137, 76),         // Warm amber
-            error: Color::Rgb(166, 89, 78),            // Terracotta
-            info: Color::Rgb(98, 122, 138),            // Warm slate
+            success: Color::Rgb(92, 128, 82),  // Olive green
+            warning: Color::Rgb(176, 137, 76), // Warm amber
+            error: Color::Rgb(166, 89, 78),    // Terracotta
+            info: Color::Rgb(98, 122, 138),    // Warm slate
 
             // Text - deep brown-charcoal hsl(30, 15%, 15%)
-            text: Color::Rgb(44, 40, 33),              // Deep brown
-            text_dim: Color::Rgb(86, 78, 67),          // Medium brown
-            text_muted: Color::Rgb(140, 131, 115),     // Light brown
+            text: Color::Rgb(44, 40, 33),          // Deep brown
+            text_dim: Color::Rgb(86, 78, 67),      // Medium brown
+            text_muted: Color::Rgb(140, 131, 115), // Light brown
 
             // Background - warm cream hsl(40, 30%, 97%)
-            bg: Color::Rgb(251, 249, 244),             // Cream paper
-            bg_secondary: Color::Rgb(247, 244, 237),   // Soft tan cards
-            bg_highlight: Color::Rgb(240, 236, 227),   // Hover cream
+            bg: Color::Rgb(251, 249, 244),           // Cream paper
+            bg_secondary: Color::Rgb(247, 244, 237), // Soft tan cards
+            bg_highlight: Color::Rgb(240, 236, 227), // Hover cream
 
             // Borders - subtle muted hsl(35, 15%, 85%)
-            border: Color::Rgb(223, 218, 207),         // Soft border
-            border_active: Color::Rgb(194, 182, 158),  // Active border
+            border: Color::Rgb(223, 218, 207),        // Soft border
+            border_active: Color::Rgb(194, 182, 158), // Active border
 
             // Focus ring - warm brown hsl(30, 20%, 25%)
-            focus_ring: Color::Rgb(77, 66, 51),        // Dark brown ring
+            focus_ring: Color::Rgb(77, 66, 51), // Dark brown ring
         }
     }
 

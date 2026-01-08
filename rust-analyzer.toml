@@ -1,0 +1,6 @@
+[cargo]
+allFeatures = true
+
+[check]
+command = "clippy"
+extraArgs = ["--all-targets", "--all-features", "--", "-D", "warnings"]

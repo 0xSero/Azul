@@ -78,10 +78,8 @@ fn slugify(input: &str) -> String {
     for ch in input.chars() {
         if ch.is_ascii_alphanumeric() {
             slug.push(ch.to_ascii_lowercase());
-        } else if ch.is_ascii() {
-            if !slug.ends_with('-') {
-                slug.push('-');
-            }
+        } else if ch.is_ascii() && !slug.ends_with('-') {
+            slug.push('-');
         }
     }
     let trimmed = slug.trim_matches('-');

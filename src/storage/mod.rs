@@ -41,12 +41,10 @@ impl Database {
     pub fn open_at(path: PathBuf) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create database directory")?;
+            std::fs::create_dir_all(parent).context("Failed to create database directory")?;
         }
 
-        let conn = Connection::open(&path)
-            .context("Failed to open database")?;
+        let conn = Connection::open(&path).context("Failed to open database")?;
 
         let db = Self { conn };
         db.init_schema()?;
@@ -56,15 +54,15 @@ impl Database {
 
     /// Get default database path
     fn default_path() -> Result<PathBuf> {
-        let data_dir = dirs::data_dir()
-            .context("Could not find data directory")?;
+        let data_dir = dirs::data_dir().context("Could not find data directory")?;
         Ok(data_dir.join("azul-browse").join("azul.db"))
     }
 
     /// Initialize database schema
     fn init_schema(&self) -> Result<()> {
-        self.conn.execute_batch(
-            r#"
+        self.conn
+            .execute_batch(
+                r#"
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT UNIQUE NOT NULL,
@@ -84,8 +82,9 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_bookmarks_url ON bookmarks(url);
             CREATE INDEX IF NOT EXISTS idx_history_url ON history(url);
             CREATE INDEX IF NOT EXISTS idx_history_visited ON history(visited_at);
-            "#
-        ).context("Failed to initialize schema")?;
+            "#,
+            )
+            .context("Failed to initialize schema")?;
 
         Ok(())
     }
@@ -98,13 +97,15 @@ impl Database {
     pub fn add_bookmark(&self, url: &str, title: &str, tags: &[String]) -> Result<Bookmark> {
         let tags_str = tags.join(",");
 
-        self.conn.execute(
-            r#"INSERT INTO bookmarks (url, title, tags)
+        self.conn
+            .execute(
+                r#"INSERT INTO bookmarks (url, title, tags)
                VALUES (?1, ?2, ?3)
                ON CONFLICT(url) DO UPDATE SET
                  title = ?2, tags = ?3, updated_at = CURRENT_TIMESTAMP"#,
-            params![url, title, tags_str],
-        ).context("Failed to add bookmark")?;
+                params![url, title, tags_str],
+            )
+            .context("Failed to add bookmark")?;
 
         let id = self.conn.last_insert_rowid();
         let now = Utc::now();
@@ -121,10 +122,9 @@ impl Database {
 
     /// Remove a bookmark by URL
     pub fn remove_bookmark(&self, url: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM bookmarks WHERE url = ?1",
-            params![url],
-        ).context("Failed to remove bookmark")?;
+        self.conn
+            .execute("DELETE FROM bookmarks WHERE url = ?1", params![url])
+            .context("Failed to remove bookmark")?;
 
         Ok(())
     }
@@ -143,13 +143,18 @@ impl Database {
     /// Get a bookmark by URL
     pub fn get_bookmark(&self, url: &str) -> Result<Option<Bookmark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, url, title, tags, created_at, updated_at FROM bookmarks WHERE url = ?1"
+            "SELECT id, url, title, tags, created_at, updated_at FROM bookmarks WHERE url = ?1",
         )?;
 
         let result = stmt.query_row(params![url], |row| {
             let tags_str: Option<String> = row.get(3)?;
             let tags = tags_str
-                .map(|s| s.split(',').filter(|t| !t.is_empty()).map(String::from).collect())
+                .map(|s| {
+                    s.split(',')
+                        .filter(|t| !t.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let created_at_str: String = row.get(4)?;
@@ -183,7 +188,12 @@ impl Database {
         let mapper = |row: &rusqlite::Row| -> rusqlite::Result<Bookmark> {
             let tags_str: Option<String> = row.get(3)?;
             let tags = tags_str
-                .map(|s| s.split(',').filter(|t| !t.is_empty()).map(String::from).collect())
+                .map(|s| {
+                    s.split(',')
+                        .filter(|t| !t.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
 
             Ok(Bookmark {
@@ -223,11 +233,9 @@ impl Database {
 
     /// Count total bookmarks
     pub fn count_bookmarks(&self) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM bookmarks",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM bookmarks", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -237,10 +245,12 @@ impl Database {
 
     /// Add a history entry
     pub fn add_history(&self, url: &str, title: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO history (url, title) VALUES (?1, ?2)",
-            params![url, title],
-        ).context("Failed to add history")?;
+        self.conn
+            .execute(
+                "INSERT INTO history (url, title) VALUES (?1, ?2)",
+                params![url, title],
+            )
+            .context("Failed to add history")?;
 
         Ok(())
     }
@@ -285,27 +295,28 @@ impl Database {
 
     /// Clear all history
     pub fn clear_history(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM history", [])
+        self.conn
+            .execute("DELETE FROM history", [])
             .context("Failed to clear history")?;
         Ok(())
     }
 
     /// Clear history older than specified days
     pub fn clear_history_older_than(&self, days: i64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM history WHERE visited_at < datetime('now', ?1)",
-            params![format!("-{} days", days)],
-        ).context("Failed to clear old history")?;
+        self.conn
+            .execute(
+                "DELETE FROM history WHERE visited_at < datetime('now', ?1)",
+                params![format!("-{} days", days)],
+            )
+            .context("Failed to clear old history")?;
         Ok(())
     }
 
     /// Count total history entries
     pub fn count_history(&self) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM history",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 }
@@ -327,7 +338,8 @@ mod tests {
     fn test_add_and_get_bookmark() {
         let (db, _dir) = test_db();
 
-        db.add_bookmark("https://example.com", "Example", &["test".to_string()]).unwrap();
+        db.add_bookmark("https://example.com", "Example", &["test".to_string()])
+            .unwrap();
 
         assert!(db.is_bookmarked("https://example.com").unwrap());
 
@@ -340,7 +352,8 @@ mod tests {
     fn test_remove_bookmark() {
         let (db, _dir) = test_db();
 
-        db.add_bookmark("https://example.com", "Example", &[]).unwrap();
+        db.add_bookmark("https://example.com", "Example", &[])
+            .unwrap();
         assert!(db.is_bookmarked("https://example.com").unwrap());
 
         db.remove_bookmark("https://example.com").unwrap();

@@ -181,9 +181,7 @@ impl MemoryClient {
         }
 
         let mut cmd = Command::new(&self.mem_layer_path);
-        cmd.arg("list")
-            .arg("--scope")
-            .arg(&self.scope);
+        cmd.arg("list").arg("--scope").arg(&self.scope);
 
         if let Some(t) = node_type {
             cmd.arg("--type").arg(t);

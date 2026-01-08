@@ -81,7 +81,9 @@ impl Tab {
     /// Navigate to a URL
     pub fn navigate(&mut self, url: &str) {
         // Trim history after current position
-        if self.history_index >= 0 && (self.history_index as usize) < self.history.len().saturating_sub(1) {
+        if self.history_index >= 0
+            && (self.history_index as usize) < self.history.len().saturating_sub(1)
+        {
             self.history.truncate((self.history_index + 1) as usize);
         }
 
@@ -116,7 +118,8 @@ impl Tab {
 
     /// Check if we can go forward in history
     pub fn can_go_forward(&self) -> bool {
-        self.history_index >= 0 && (self.history_index as usize) < self.history.len().saturating_sub(1)
+        self.history_index >= 0
+            && (self.history_index as usize) < self.history.len().saturating_sub(1)
     }
 
     /// Go back in history, returns the URL to navigate to

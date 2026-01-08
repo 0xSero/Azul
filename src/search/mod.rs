@@ -208,8 +208,8 @@ impl SearchEngine for DuckDuckGoEngine {
         );
 
         let response_text = self.client.get(&url)?;
-        let ddg_resp: DDGResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse DuckDuckGo response")?;
+        let ddg_resp: DDGResponse =
+            serde_json::from_str(&response_text).context("Failed to parse DuckDuckGo response")?;
 
         let mut results = Vec::new();
 
@@ -290,7 +290,8 @@ impl SearchEngine for DuckDuckGoEngine {
         // Add direct results
         for result in &ddg_resp.results {
             if !result.first_url.is_empty() && !result.text.is_empty() {
-                let title = extract_ddg_title(&result.result).unwrap_or_else(|| result.text.clone());
+                let title =
+                    extract_ddg_title(&result.result).unwrap_or_else(|| result.text.clone());
                 results.push(SearchResult {
                     title,
                     url: result.first_url.clone(),
@@ -320,10 +321,14 @@ impl SearchEngine for DuckDuckGoEngine {
                 return Ok(SearchResponse {
                     query: query.to_string(),
                     engine: EngineType::DuckDuckGo, // Keep engine type for display
-                    results: wiki_resp.results.into_iter().map(|mut r| {
-                        r.engine = "Wikipedia (via DuckDuckGo fallback)".to_string();
-                        r
-                    }).collect(),
+                    results: wiki_resp
+                        .results
+                        .into_iter()
+                        .map(|mut r| {
+                            r.engine = "Wikipedia (via DuckDuckGo fallback)".to_string();
+                            r
+                        })
+                        .collect(),
                     total: 0,
                 });
             }
@@ -403,8 +408,8 @@ impl SearchEngine for WikipediaEngine {
         );
 
         let response_text = self.client.get(&url)?;
-        let response: WikipediaResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse Wikipedia response")?;
+        let response: WikipediaResponse =
+            serde_json::from_str(&response_text).context("Failed to parse Wikipedia response")?;
 
         let results = response
             .query
@@ -413,7 +418,10 @@ impl SearchEngine for WikipediaEngine {
                     .into_iter()
                     .map(|r| SearchResult {
                         title: r.title.clone(),
-                        url: format!("https://en.wikipedia.org/wiki/{}", r.title.replace(' ', "_")),
+                        url: format!(
+                            "https://en.wikipedia.org/wiki/{}",
+                            r.title.replace(' ', "_")
+                        ),
                         description: html_to_text(&r.snippet),
                         engine: "Wikipedia".to_string(),
                     })
@@ -777,14 +785,11 @@ struct OpenLibraryDoc {
 impl SearchEngine for OpenLibraryEngine {
     fn search(&self, query: &str) -> Result<SearchResponse> {
         let encoded = urlencoding::encode(query);
-        let url = format!(
-            "https://openlibrary.org/search.json?q={}&limit=20",
-            encoded
-        );
+        let url = format!("https://openlibrary.org/search.json?q={}&limit=20", encoded);
 
         let response_text = self.client.get(&url)?;
-        let response: OpenLibraryResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse OpenLibrary response")?;
+        let response: OpenLibraryResponse =
+            serde_json::from_str(&response_text).context("Failed to parse OpenLibrary response")?;
 
         let results = response
             .docs
@@ -900,8 +905,7 @@ impl SearchEngine for ExaEngine {
             anyhow::bail!("Exa API error {}: {}", status, text);
         }
 
-        let exa_resp: ExaResponse = response.json()
-            .context("Failed to parse Exa response")?;
+        let exa_resp: ExaResponse = response.json().context("Failed to parse Exa response")?;
 
         let results = exa_resp
             .results
@@ -1036,14 +1040,18 @@ impl SearchManager {
 
     /// Search all engines and return limited results per engine
     /// This is the multi-engine aggregated search
-    pub fn search_all_with_limit(&self, query: &str, limit_per_engine: usize) -> AggregatedSearchResponse {
+    pub fn search_all_with_limit(
+        &self,
+        query: &str,
+        limit_per_engine: usize,
+    ) -> AggregatedSearchResponse {
         let mut all_results = Vec::new();
         let mut engine_results: std::collections::HashMap<EngineType, Vec<SearchResult>> =
             std::collections::HashMap::new();
 
         // Define the order of engines for display (Exa first if available)
         let engine_order = [
-            EngineType::Exa,          // AI semantic search (if configured)
+            EngineType::Exa, // AI semantic search (if configured)
             EngineType::Wikipedia,
             EngineType::ArXiv,
             EngineType::Scholar,
@@ -1118,9 +1126,11 @@ impl AggregatedSearchResponse {
             lines.push(String::new());
         }
 
-        lines.push(format!("Found {} results across {} engines",
-                self.results.len(),
-                self.results_by_engine.len()));
+        lines.push(format!(
+            "Found {} results across {} engines",
+            self.results.len(),
+            self.results_by_engine.len()
+        ));
         lines.push(String::new());
         lines.push("---".to_string());
         lines.push(String::new());
@@ -1219,7 +1229,7 @@ pub fn parse_query(input: &str) -> (Option<EngineType>, String) {
 pub enum QueryTarget {
     Url(String),
     Search { engine: EngineType, query: String },
-    MultiSearch { query: String },  // New: multi-engine search
+    MultiSearch { query: String }, // New: multi-engine search
 }
 
 /// Determine whether the input should be treated as a URL or a search query
@@ -1288,11 +1298,7 @@ pub fn results_to_page(response: SearchResponse) -> crate::browser::Page {
     }
 
     Page {
-        url: format!(
-            "search:{}{}",
-            response.engine.prefix(),
-            response.query
-        ),
+        url: format!("search:{}{}", response.engine.prefix(), response.query),
         title: format!("{}: {}", response.engine.name(), response.query),
         content_lines: lines,
         raw_content: String::new(),
@@ -1314,10 +1320,7 @@ mod tests {
             parse_query("a:neural networks"),
             (Some(EngineType::ArXiv), "neural networks".to_string())
         );
-        assert_eq!(
-            parse_query("no prefix"),
-            (None, "no prefix".to_string())
-        );
+        assert_eq!(parse_query("no prefix"), (None, "no prefix".to_string()));
     }
 
     #[test]
@@ -1350,7 +1353,11 @@ mod tests {
 
         match classify_query("g:rust") {
             QueryTarget::Search { engine, .. } => {
-                assert_eq!(engine, EngineType::DuckDuckGo, "Google should fall back to DuckDuckGo");
+                assert_eq!(
+                    engine,
+                    EngineType::DuckDuckGo,
+                    "Google should fall back to DuckDuckGo"
+                );
             }
             other => panic!("expected search, got {:?}", other),
         }

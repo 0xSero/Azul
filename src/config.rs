@@ -9,6 +9,8 @@ pub struct Config {
     pub theme: Theme,
     #[serde(default)]
     pub ai: Option<AIConfig>,
+    #[serde(default)]
+    pub ui: UiConfig,
     #[serde(default = "default_refresh_rate")]
     pub refresh_rate_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,6 +49,20 @@ pub struct AIConfig {
     pub base_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub panes: PaneConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneConfig {
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u16,
+    #[serde(default)]
+    pub focus_mode: bool,
+}
+
 fn default_accent() -> String {
     "#9f8a60".to_string() // Warm tan (Warm Paper theme)
 }
@@ -67,6 +83,10 @@ fn default_refresh_rate() -> u64 {
     200
 }
 
+fn default_sidebar_width() -> u16 {
+    26
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self {
@@ -83,6 +103,7 @@ impl Default for Config {
         Self {
             theme: Theme::default(),
             ai: None,
+            ui: UiConfig::default(),
             refresh_rate_ms: default_refresh_rate(),
             rag_base_url: None,
             memory_scope: None,
@@ -91,9 +112,24 @@ impl Default for Config {
     }
 }
 
+impl Default for PaneConfig {
+    fn default() -> Self {
+        Self {
+            sidebar_width: default_sidebar_width(),
+            focus_mode: false,
+        }
+    }
+}
+
 impl Config {
     /// Get the config file path (JSON format, compatible with Go version)
     pub fn config_path() -> PathBuf {
+        if let Ok(path) = std::env::var("AZUL_CONFIG_PATH") {
+            if !path.is_empty() {
+                return PathBuf::from(path);
+            }
+        }
+
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("azul")
@@ -141,7 +177,7 @@ impl Config {
         }
 
         // Provider
-        if let Some(provider) = std::env::var("AZUL_AI_PROVIDER").ok() {
+        if let Ok(provider) = std::env::var("AZUL_AI_PROVIDER") {
             if !provider.is_empty() && ai.provider.as_ref() != Some(&provider) {
                 ai.provider = Some(provider);
                 changed = true;
@@ -157,7 +193,7 @@ impl Config {
         }
 
         // Models list
-        if let Some(models_env) = std::env::var("AZUL_AI_MODELS").ok() {
+        if let Ok(models_env) = std::env::var("AZUL_AI_MODELS") {
             let models = split_list(&models_env);
             if !models.is_empty() {
                 ai.models = Some(models);
@@ -166,7 +202,7 @@ impl Config {
         }
 
         // Fallback models
-        if let Some(fallback_env) = std::env::var("AZUL_AI_FALLBACK_MODELS").ok() {
+        if let Ok(fallback_env) = std::env::var("AZUL_AI_FALLBACK_MODELS") {
             let models = split_list(&fallback_env);
             if !models.is_empty() {
                 ai.fallback_models = Some(models);
@@ -243,7 +279,8 @@ impl Config {
     /// Get the Exa API key (from config or environment)
     pub fn get_exa_api_key(&self) -> Option<String> {
         // Config takes precedence, then env var
-        self.exa_api_key.clone()
+        self.exa_api_key
+            .clone()
             .or_else(|| std::env::var("EXA_API_KEY").ok())
     }
 }
@@ -263,7 +300,7 @@ fn lookup_env_non_empty(keys: &[&str]) -> Option<String> {
 /// Split comma/space delimited list into trimmed entries
 fn split_list(value: &str) -> Vec<String> {
     value
-        .split(|c| c == ',' || c == ' ' || c == '\n' || c == '\t')
+        .split([',', ' ', '\n', '\t'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(String::from)

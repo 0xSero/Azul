@@ -7,13 +7,21 @@ use std::time::Duration;
 
 use crate::ai::Summarizer;
 use crate::browser::{Browser, Page, RenderMode};
-use crate::chat::ChatMessage;
+use crate::chat::{ChatMessage, ToolCall as ChatToolCall};
 use crate::config::Config;
+
+/// Response data from chat API including tool calls
+#[derive(Debug, Clone)]
+pub struct ChatResponseData {
+    pub content: String,
+    pub tool_calls: Vec<ChatToolCall>,
+}
 use crate::mascot::{Mascot, MascotState};
-use crate::search::{self, QueryTarget, SearchManager};
 use crate::scrape;
+use crate::search::{self, QueryTarget, SearchManager};
 use crate::storage::{Bookmark, Database, HistoryEntry};
 use crate::tabs::TabManager;
+use crate::ui::panes::PaneManager;
 use crate::ui::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +63,7 @@ pub enum AppMessage {
     LoadError(usize, String),
     AiSummary(String),
     AiError(String),
-    ChatResponse(String),
+    ChatResponse(ChatResponseData),
     ToolAction(ToolAction),
     RagResponse(Vec<String>),
     RagError(String),
@@ -87,11 +95,11 @@ pub struct App {
     pub focus: Focus,
     pub should_quit: bool,
     pub animation_tick: usize,
-    pub focus_pulse_phase: u8,  // 0-255 for smooth focus animation
+    pub focus_pulse_phase: u8, // 0-255 for smooth focus animation
     pub status_message: String,
     pub view_mode: ViewMode,
     pub format_text: bool,
-    pub zen_mode: bool,
+    pub panes: PaneManager,
     pub ai_summary: Option<String>,
     pub panel_mode: PanelMode,
 
@@ -148,15 +156,29 @@ pub enum ViewMode {
 impl App {
     pub fn new() -> Result<Self> {
         let config = Config::load()?;
+        let pane_sidebar_width = config.ui.panes.sidebar_width;
+        let pane_focus_mode = config.ui.panes.focus_mode;
         let (page_tx, page_rx) = channel();
 
+        let fixture_mode =
+            cfg!(feature = "fixture-mode") && std::env::var_os("AZUL_FIXTURE_DIR").is_some();
+
         // Try to open database, but don't fail if it errors
-        let db = Database::open().ok();
+        let db = if fixture_mode {
+            None
+        } else {
+            Database::open().ok()
+        };
 
         // Initialize chat session with available models
-        let chat_session = if let Some(api_key) = config.get_api_key() {
+        let chat_session = if fixture_mode {
+            None
+        } else if let Some(api_key) = config.get_api_key() {
             if !api_key.is_empty() {
-                let model = config.get_ai_model().unwrap_or("qwen/qwen3-235b-a22b:free").to_string();
+                let model = config
+                    .get_ai_model()
+                    .unwrap_or("qwen/qwen3-235b-a22b:free")
+                    .to_string();
                 let mut models = vec![model.clone()];
                 if let Some(fallback) = config.get_fallback_models() {
                     models.extend(fallback);
@@ -170,8 +192,16 @@ impl App {
         };
 
         // Initialize RAG and memory clients
-        let rag_client = crate::rag::RagClient::from_config(&config);
-        let memory_client = crate::memory::MemoryClient::from_config(&config);
+        let rag_client = if fixture_mode {
+            None
+        } else {
+            crate::rag::RagClient::from_config(&config)
+        };
+        let memory_client = if fixture_mode {
+            None
+        } else {
+            crate::memory::MemoryClient::from_config(&config)
+        };
 
         let mut app = Self {
             config,
@@ -179,12 +209,13 @@ impl App {
             should_quit: false,
             animation_tick: 0,
             focus_pulse_phase: 0,
-            status_message: "Ready - / search | t new tab | b bookmarks | c chat | r rag | m memory | ? help".to_string(),
+            status_message:
+                "Ready - / search | t new tab | b bookmarks | c chat | z focus | ? help".to_string(),
             view_mode: ViewMode::Rendered,
             format_text: true,
-            zen_mode: false,
+            panes: PaneManager::new(pane_sidebar_width),
             ai_summary: None,
-            panel_mode: PanelMode::None,  // Chat is always visible, not a panel mode
+            panel_mode: PanelMode::None, // Chat is handled as a side pane
             tabs: TabManager::new(),
             url_input: String::new(),
             mascot: Mascot::new(),
@@ -197,7 +228,7 @@ impl App {
             chat_input: String::new(),
             chat_selected_model: 0,
             chat_scroll: 0,
-            chat_focused: false,  // Start in content mode, press 'c' or '3' for chat
+            chat_focused: false, // Start in content mode, press 'c' or '3' for chat
             settings_selected: 0,
             settings_model_input: String::new(),
             settings_editing_model: false,
@@ -211,14 +242,69 @@ impl App {
             theme_manager: ThemeManager::new(),
             page_rx,
             page_tx,
-            summarizer: Summarizer::from_env().map(Arc::new),
+            summarizer: if fixture_mode {
+                None
+            } else {
+                Summarizer::from_env().map(Arc::new)
+            },
         };
+
+        app.panes.focus_mode = pane_focus_mode;
 
         // Load bookmarks and history
         app.refresh_bookmarks();
         app.refresh_history();
 
         Ok(app)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_test() -> Self {
+        let config = Config::default();
+        let pane_sidebar_width = config.ui.panes.sidebar_width;
+        let (page_tx, page_rx) = channel();
+
+        Self {
+            config,
+            focus: Focus::Content,
+            should_quit: false,
+            animation_tick: 0,
+            focus_pulse_phase: 0,
+            status_message:
+                "Ready - / search | t new tab | b bookmarks | c chat | z focus | ? help".to_string(),
+            view_mode: ViewMode::Rendered,
+            format_text: true,
+            panes: PaneManager::new(pane_sidebar_width),
+            ai_summary: None,
+            panel_mode: PanelMode::None,
+            tabs: TabManager::new(),
+            url_input: String::new(),
+            mascot: Mascot::new(),
+            db: None,
+            bookmarks_list: Vec::new(),
+            history_list: Vec::new(),
+            bookmarks_selected: 0,
+            history_selected: 0,
+            chat_session: None,
+            chat_input: String::new(),
+            chat_selected_model: 0,
+            chat_scroll: 0,
+            chat_focused: false,
+            settings_selected: 0,
+            settings_model_input: String::new(),
+            settings_editing_model: false,
+            rag_client: None,
+            rag_results: Vec::new(),
+            rag_query: String::new(),
+            rag_scroll: 0,
+            rag_loading: false,
+            memory_client: None,
+            memory_nodes: Vec::new(),
+            theme_manager: ThemeManager::new(),
+            page_rx,
+            page_tx,
+            summarizer: None,
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -244,7 +330,10 @@ impl App {
 
     /// Get sidebar selected from active tab
     pub fn sidebar_selected(&self) -> usize {
-        self.tabs.active_tab().map(|t| t.sidebar_selected).unwrap_or(0)
+        self.tabs
+            .active_tab()
+            .map(|t| t.sidebar_selected)
+            .unwrap_or(0)
     }
 
     /// Set sidebar selected on active tab
@@ -261,7 +350,26 @@ impl App {
 
     /// Get current render mode from active tab
     pub fn render_mode(&self) -> RenderMode {
-        self.tabs.active_tab().map(|t| t.render_mode).unwrap_or(RenderMode::Auto)
+        self.tabs
+            .active_tab()
+            .map(|t| t.render_mode)
+            .unwrap_or(RenderMode::Auto)
+    }
+
+    pub fn is_hard_content(&self) -> bool {
+        const HARD_CONTENT_LINE_THRESHOLD: usize = 400;
+
+        let Some(page) = self.current_page() else {
+            return false;
+        };
+
+        let url_lower = page.url.to_lowercase();
+        let is_pdf = page.title == "PDF Document"
+            || url_lower.ends_with(".pdf")
+            || url_lower.contains(".pdf?");
+        let is_long = page.content_lines.len() >= HARD_CONTENT_LINE_THRESHOLD;
+
+        is_pdf || is_long
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -293,6 +401,7 @@ impl App {
                             }
                         }
                     }
+                    self.panes.clear_auto_dismiss();
                     self.ai_summary = None;
                 }
                 AppMessage::LoadError(tab_id, err) => {
@@ -323,42 +432,45 @@ impl App {
                 }
                 AppMessage::ChatResponse(response) => {
                     if let Some(session) = &mut self.chat_session {
-                        session.add_assistant_message(response);
+                        session.add_assistant_message_with_tools(
+                            response.content,
+                            response.tool_calls,
+                        );
                         self.chat_scroll = 0; // Auto-scroll to bottom (newest messages)
                         self.mascot.set_state(MascotState::Success);
                         self.status_message = "Response received".to_string();
                     }
                 }
-                AppMessage::ToolAction(action) => {
-                    match action {
-                        ToolAction::Navigate(url) => {
-                            self.url_input = url;
-                            self.navigate();
-                            self.status_message = "AI navigated to URL".to_string();
-                        }
-                        ToolAction::FollowLink(idx) => {
-                            if let Some(page) = self.current_page() {
-                                if let Some(link) = page.links.get(idx) {
-                                    self.url_input = link.url.clone();
-                                    self.navigate();
-                                    self.status_message = format!("AI followed link {}", idx + 1);
-                                }
-                            }
-                        }
-                        ToolAction::Scroll { direction, amount } => {
-                            if let Some(tab) = self.tabs.active_tab_mut() {
-                                match direction.as_str() {
-                                    "up" => tab.scroll_offset = tab.scroll_offset.saturating_sub(amount),
-                                    "down" => tab.scroll_offset += amount,
-                                    "top" => tab.scroll_offset = 0,
-                                    "bottom" => tab.scroll_offset = usize::MAX / 2,
-                                    _ => {}
-                                }
-                                self.status_message = format!("AI scrolled {}", direction);
+                AppMessage::ToolAction(action) => match action {
+                    ToolAction::Navigate(url) => {
+                        self.url_input = url;
+                        self.navigate();
+                        self.status_message = "AI navigated to URL".to_string();
+                    }
+                    ToolAction::FollowLink(idx) => {
+                        if let Some(page) = self.current_page() {
+                            if let Some(link) = page.links.get(idx) {
+                                self.url_input = link.url.clone();
+                                self.navigate();
+                                self.status_message = format!("AI followed link {}", idx + 1);
                             }
                         }
                     }
-                }
+                    ToolAction::Scroll { direction, amount } => {
+                        if let Some(tab) = self.tabs.active_tab_mut() {
+                            match direction.as_str() {
+                                "up" => {
+                                    tab.scroll_offset = tab.scroll_offset.saturating_sub(amount)
+                                }
+                                "down" => tab.scroll_offset += amount,
+                                "top" => tab.scroll_offset = 0,
+                                "bottom" => tab.scroll_offset = usize::MAX / 2,
+                                _ => {}
+                            }
+                            self.status_message = format!("AI scrolled {}", direction);
+                        }
+                    }
+                },
                 AppMessage::RagResponse(results) => {
                     self.rag_loading = false;
                     self.rag_results = results;
@@ -390,6 +502,20 @@ impl App {
         self.update_status();
     }
 
+    fn open_chat_panel(&mut self) {
+        if !self.panes.chat_visible {
+            self.panes.show_chat();
+        }
+        self.chat_focused = true;
+        self.status_message = "Chat - type message, Esc to close".to_string();
+    }
+
+    fn persist_pane_state(&mut self) {
+        self.config.ui.panes.sidebar_width = self.panes.sidebar_width;
+        self.config.ui.panes.focus_mode = self.panes.focus_mode;
+        let _ = self.config.save();
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // KEY HANDLING
     // ═══════════════════════════════════════════════════════════════════════════
@@ -407,7 +533,7 @@ impl App {
             PanelMode::Settings => return self.handle_settings_keys(key),
             PanelMode::Rag => return self.handle_rag_keys(key),
             PanelMode::Memory => return self.handle_memory_keys(key),
-            PanelMode::Chat | PanelMode::None => {}  // Chat is always visible, handled below
+            PanelMode::Chat | PanelMode::None => {} // Chat is handled as a side pane
         }
 
         // Chat input handling when chat is focused
@@ -416,6 +542,7 @@ impl App {
                 // Esc unfocuses chat
                 (KeyCode::Esc, _) => {
                     self.chat_focused = false;
+                    self.panes.hide_chat();
                     self.status_message = "Content mode - 'c' for chat, '/' for URL".to_string();
                     return Ok(());
                 }
@@ -486,12 +613,14 @@ impl App {
             }
             (KeyCode::Char('['), KeyModifiers::CONTROL) => {
                 self.tabs.prev_tab();
-                self.status_message = format!("Tab {}/{}", self.tabs.active_index() + 1, self.tabs.count());
+                self.status_message =
+                    format!("Tab {}/{}", self.tabs.active_index() + 1, self.tabs.count());
                 return Ok(());
             }
             (KeyCode::Char(']'), KeyModifiers::CONTROL) => {
                 self.tabs.next_tab();
-                self.status_message = format!("Tab {}/{}", self.tabs.active_index() + 1, self.tabs.count());
+                self.status_message =
+                    format!("Tab {}/{}", self.tabs.active_index() + 1, self.tabs.count());
                 return Ok(());
             }
             // Bookmarks & History
@@ -515,8 +644,7 @@ impl App {
             }
             // Chat focus (same as '3')
             (KeyCode::Char('c'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
-                self.chat_focused = true;
-                self.status_message = "Chat - type message, Esc to exit".to_string();
+                self.open_chat_panel();
                 return Ok(());
             }
             (KeyCode::Char(','), KeyModifiers::NONE) => {
@@ -549,8 +677,7 @@ impl App {
                 return Ok(());
             }
             (KeyCode::Char('3'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
-                self.chat_focused = true;
-                self.status_message = "Chat - type message, Esc to exit".to_string();
+                self.open_chat_panel();
                 return Ok(());
             }
             _ => {}
@@ -586,10 +713,12 @@ impl App {
                 self.set_scroll_offset(scroll + 1);
             }
             // Half-page scrolling (vim Ctrl+U/Ctrl+D style)
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('u'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
                 self.set_scroll_offset(scroll.saturating_sub(half_page));
             }
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('d'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
                 self.set_scroll_offset(scroll + half_page);
             }
             // Full page scrolling
@@ -601,10 +730,12 @@ impl App {
                 self.set_scroll_offset(scroll + page_size);
             }
             // Fast scroll with Shift+j/k (5 lines at a time)
-            (KeyCode::Char('K'), KeyModifiers::SHIFT) | (KeyCode::Char('K'), KeyModifiers::NONE) => {
+            (KeyCode::Char('K'), KeyModifiers::SHIFT)
+            | (KeyCode::Char('K'), KeyModifiers::NONE) => {
                 self.set_scroll_offset(scroll.saturating_sub(5));
             }
-            (KeyCode::Char('J'), KeyModifiers::SHIFT) | (KeyCode::Char('J'), KeyModifiers::NONE) => {
+            (KeyCode::Char('J'), KeyModifiers::SHIFT)
+            | (KeyCode::Char('J'), KeyModifiers::NONE) => {
                 self.set_scroll_offset(scroll + 5);
             }
             (KeyCode::Char('f'), KeyModifiers::NONE) => {
@@ -616,13 +747,14 @@ impl App {
                 };
             }
             (KeyCode::Char('z'), KeyModifiers::NONE) => {
-                self.zen_mode = !self.zen_mode;
-                if self.zen_mode {
+                self.panes.toggle_focus_mode();
+                self.persist_pane_state();
+                if self.panes.focus_mode {
                     self.focus = Focus::Content;
                     self.chat_focused = false;
-                    self.status_message = "Zen mode ON (z to toggle)".to_string();
+                    self.status_message = "Focus mode ON (z to toggle)".to_string();
                 } else {
-                    self.status_message = "Zen mode OFF".to_string();
+                    self.status_message = "Focus mode OFF".to_string();
                 }
             }
             // Theme cycling: Ctrl+T cycles themes
@@ -678,10 +810,7 @@ impl App {
                 if let Some(tab) = self.tabs.active_tab() {
                     if !tab.url.is_empty() {
                         let url = tab.url.clone();
-                        match std::process::Command::new("xdg-open")
-                            .arg(&url)
-                            .spawn()
-                        {
+                        match std::process::Command::new("xdg-open").arg(&url).spawn() {
                             Ok(_) => {
                                 self.status_message = format!("Opened in system viewer: {}", url);
                             }
@@ -689,7 +818,8 @@ impl App {
                                 // Try macOS open command as fallback
                                 match std::process::Command::new("open").arg(&url).spawn() {
                                     Ok(_) => {
-                                        self.status_message = format!("Opened in system viewer: {}", url);
+                                        self.status_message =
+                                            format!("Opened in system viewer: {}", url);
                                     }
                                     Err(e) => {
                                         self.status_message = format!("Failed to open: {}", e);
@@ -700,7 +830,9 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Left, _) | (KeyCode::Char('p'), KeyModifiers::NONE) | (KeyCode::Char('H'), _) => {
+            (KeyCode::Left, _)
+            | (KeyCode::Char('p'), KeyModifiers::NONE)
+            | (KeyCode::Char('H'), _) => {
                 // Go back in history (H = vim-style back, like :bprev)
                 if let Some(tab) = self.tabs.active_tab_mut() {
                     if let Some(url) = tab.go_back() {
@@ -712,7 +844,9 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Right, _) | (KeyCode::Char('n'), KeyModifiers::NONE) | (KeyCode::Char('L'), _) => {
+            (KeyCode::Right, _)
+            | (KeyCode::Char('n'), KeyModifiers::NONE)
+            | (KeyCode::Char('L'), _) => {
                 // Go forward in history (L = vim-style forward)
                 if let Some(tab) = self.tabs.active_tab_mut() {
                     if let Some(url) = tab.go_forward() {
@@ -915,11 +1049,9 @@ impl App {
             if let Some(tab) = self.tabs.active_tab_mut() {
                 tab.navigate(&input);
             }
-        } else {
-            if let Some(tab) = self.tabs.active_tab_mut() {
-                tab.loading = true;
-                tab.error = None;
-            }
+        } else if let Some(tab) = self.tabs.active_tab_mut() {
+            tab.loading = true;
+            tab.error = None;
         }
 
         let tx = self.page_tx.clone();
@@ -938,7 +1070,10 @@ impl App {
                     let browser = match Browser::new() {
                         Ok(b) => b,
                         Err(e) => {
-                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Browser init error: {}", e)));
+                            let _ = tx.send(AppMessage::LoadError(
+                                tab_id,
+                                format!("Browser init error: {}", e),
+                            ));
                             return;
                         }
                     };
@@ -948,7 +1083,10 @@ impl App {
                             let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
                         }
                         Err(err) => {
-                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Fetch error: {}", err)));
+                            let _ = tx.send(AppMessage::LoadError(
+                                tab_id,
+                                format!("Fetch error: {}", err),
+                            ));
                         }
                     }
                 });
@@ -958,8 +1096,8 @@ impl App {
                 self.mascot.set_state(MascotState::Searching);
 
                 std::thread::spawn(move || {
-                    let search_result =
-                        SearchManager::new().and_then(|manager| manager.search_with(engine, &query));
+                    let search_result = SearchManager::new()
+                        .and_then(|manager| manager.search_with(engine, &query));
 
                     match search_result {
                         Ok(response) => {
@@ -967,7 +1105,10 @@ impl App {
                             let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
                         }
                         Err(err) => {
-                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Search error: {}", err)));
+                            let _ = tx.send(AppMessage::LoadError(
+                                tab_id,
+                                format!("Search error: {}", err),
+                            ));
                         }
                     }
                 });
@@ -989,14 +1130,17 @@ impl App {
                             // Generate AI summary of search results if summarizer available
                             let ai_summary = if let Some(sum) = &summarizer {
                                 // Convert search results to AI-compatible format
-                                let ai_results: Vec<crate::ai::SearchResult> = response.results.iter().take(10).map(|r| {
-                                    crate::ai::SearchResult {
+                                let ai_results: Vec<crate::ai::SearchResult> = response
+                                    .results
+                                    .iter()
+                                    .take(10)
+                                    .map(|r| crate::ai::SearchResult {
                                         title: r.title.clone(),
                                         url: r.url.clone(),
                                         description: r.description.clone(),
                                         source: r.engine.clone(),
-                                    }
-                                }).collect();
+                                    })
+                                    .collect();
 
                                 sum.summarize_search(&query, &ai_results).ok()
                             } else {
@@ -1008,7 +1152,10 @@ impl App {
                             let _ = tx.send(AppMessage::PageLoaded(tab_id, page));
                         }
                         Err(err) => {
-                            let _ = tx.send(AppMessage::LoadError(tab_id, format!("Search error: {}", err)));
+                            let _ = tx.send(AppMessage::LoadError(
+                                tab_id,
+                                format!("Search error: {}", err),
+                            ));
                         }
                     }
                 });
@@ -1067,7 +1214,9 @@ impl App {
     /// Check if current URL is bookmarked
     pub fn is_current_bookmarked(&self) -> bool {
         let Some(db) = &self.db else { return false };
-        let Some(page) = self.current_page() else { return false };
+        let Some(page) = self.current_page() else {
+            return false;
+        };
         db.is_bookmarked(&page.url).unwrap_or(false)
     }
 
@@ -1095,16 +1244,16 @@ impl App {
         self.mascot.set_state(MascotState::Loading);
         self.status_message = "Summarizing page with AI...".to_string();
 
-        std::thread::spawn(move || {
-            match summarizer.summarize_page(&title, &url, &content_text) {
+        std::thread::spawn(
+            move || match summarizer.summarize_page(&title, &url, &content_text) {
                 Ok(summary) => {
                     let _ = tx.send(AppMessage::AiSummary(summary));
                 }
                 Err(err) => {
                     let _ = tx.send(AppMessage::AiError(format!("{}", err)));
                 }
-            }
-        });
+            },
+        );
 
         Ok(())
     }
@@ -1141,6 +1290,27 @@ impl App {
             KeyCode::Down => {
                 self.chat_scroll = self.chat_scroll.saturating_sub(1);
             }
+            // Vim-style scrolling with j/k when input is empty
+            KeyCode::Char('j') if self.chat_input.is_empty() => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(1);
+            }
+            KeyCode::Char('k') if self.chat_input.is_empty() => {
+                self.chat_scroll += 1;
+            }
+            KeyCode::Char('J') if self.chat_input.is_empty() => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(5);
+            }
+            KeyCode::Char('K') if self.chat_input.is_empty() => {
+                self.chat_scroll += 5;
+            }
+            KeyCode::Char('g') if self.chat_input.is_empty() => {
+                // Scroll to top (oldest messages)
+                self.chat_scroll = usize::MAX; // Will be clamped in render
+            }
+            KeyCode::Char('G') if self.chat_input.is_empty() => {
+                // Scroll to bottom (newest messages)
+                self.chat_scroll = 0;
+            }
             KeyCode::Char(c) => {
                 self.chat_input.push(c);
             }
@@ -1154,7 +1324,10 @@ impl App {
                     self.chat_scroll = 0;
 
                     let browser_context = self.get_browser_context();
-                    let rag_url = self.config.rag_base_url.clone()
+                    let rag_url = self
+                        .config
+                        .rag_base_url
+                        .clone()
                         .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
 
                     if let Some(session) = &mut self.chat_session {
@@ -1162,7 +1335,9 @@ impl App {
                         session.add_user_message(message.clone());
 
                         let api_key = self.config.get_api_key().unwrap_or("").to_string();
-                        let base_url = self.config.get_ai_base_url()
+                        let base_url = self
+                            .config
+                            .get_ai_base_url()
                             .unwrap_or("https://openrouter.ai/api/v1")
                             .to_string();
                         let models = session.available_models.clone();
@@ -1187,10 +1362,14 @@ impl App {
                                 context_parts.push(browser_context);
                             }
                             if !rag_context.is_empty() && !rag_context.contains("unavailable") {
-                                context_parts.push(format!("<rag_results>\n{}\n</rag_results>", rag_context));
+                                context_parts.push(format!(
+                                    "<rag_results>\n{}\n</rag_results>",
+                                    rag_context
+                                ));
                             }
                             if !exa_context.is_empty() {
-                                context_parts.push(format!("<web_search>\n{}\n</web_search>", exa_context));
+                                context_parts
+                                    .push(format!("<web_search>\n{}\n</web_search>", exa_context));
                             }
 
                             // Modify the last user message to include context
@@ -1199,7 +1378,11 @@ impl App {
                                     let enhanced_content = if context_parts.is_empty() {
                                         last_msg.content.clone()
                                     } else {
-                                        format!("{}\n\n**User Question:** {}", context_parts.join("\n\n"), last_msg.content)
+                                        format!(
+                                            "{}\n\n**User Question:** {}",
+                                            context_parts.join("\n\n"),
+                                            last_msg.content
+                                        )
                                     };
                                     last_msg.content = enhanced_content;
                                 }
@@ -1208,10 +1391,14 @@ impl App {
                             // Step 4: Send to LLM (without tool calling - just use the context)
                             match send_chat_simple(&api_key, &base_url, &models, &messages) {
                                 Ok(response) => {
-                                    let _ = tx.send(AppMessage::ChatResponse(response));
+                                    let _ = tx.send(AppMessage::ChatResponse(ChatResponseData {
+                                        content: response,
+                                        tool_calls: Vec::new(),
+                                    }));
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
+                                    let _ =
+                                        tx.send(AppMessage::AiError(format!("Chat error: {}", e)));
                                 }
                             }
                         });
@@ -1279,11 +1466,23 @@ impl App {
 
                     // Clone what we need for the thread
                     let tx = self.page_tx.clone();
-                    let rag_url = self.config.rag_base_url.clone().unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
+                    let rag_url = self
+                        .config
+                        .rag_base_url
+                        .clone()
+                        .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
                     let exa_key = self.config.get_exa_api_key();
                     let api_key = self.config.get_api_key().unwrap_or("").to_string();
-                    let base_url = self.config.get_ai_base_url().unwrap_or("https://api.minimax.io/v1").to_string();
-                    let model = self.config.get_ai_model().unwrap_or("MiniMax-M2.1").to_string();
+                    let base_url = self
+                        .config
+                        .get_ai_base_url()
+                        .unwrap_or("https://api.minimax.io/v1")
+                        .to_string();
+                    let model = self
+                        .config
+                        .get_ai_model()
+                        .unwrap_or("MiniMax-M2.1")
+                        .to_string();
 
                     std::thread::spawn(move || {
                         // Step 1: Gather sources from Exa and RAG
@@ -1336,12 +1535,10 @@ impl App {
                             query, sources_context
                         );
 
-                        let messages = vec![
-                            serde_json::json!({
-                                "role": "user",
-                                "content": synthesis_prompt
-                            })
-                        ];
+                        let messages = vec![serde_json::json!({
+                            "role": "user",
+                            "content": synthesis_prompt
+                        })];
 
                         // Call LLM
                         let client = reqwest::blocking::Client::builder()
@@ -1367,9 +1564,12 @@ impl App {
                             .ok()
                             .and_then(|r| r.json::<serde_json::Value>().ok())
                             .and_then(|j| {
-                                j.get("choices")?.get(0)?
-                                    .get("message")?.get("content")?
-                                    .as_str().map(|s| s.to_string())
+                                j.get("choices")?
+                                    .get(0)?
+                                    .get("message")?
+                                    .get("content")?
+                                    .as_str()
+                                    .map(|s| s.to_string())
                             });
 
                         // Step 4: Format results
@@ -1426,7 +1626,9 @@ impl App {
     fn get_browser_context(&self) -> String {
         // Only return context if there's an actual page loaded
         if let Some(page) = self.current_page() {
-            let content_preview = page.content_lines.iter()
+            let content_preview = page
+                .content_lines
+                .iter()
                 .take(15)
                 .cloned()
                 .collect::<Vec<_>>()
@@ -1469,12 +1671,18 @@ impl App {
 
     fn update_status(&mut self) {
         self.status_message = match self.focus {
-            Focus::Content => "Content - j/k scroll | H/L back/fwd | / search | ? help".to_string(),
-            Focus::Sidebar => "Sidebar - j/k navigate | Enter open | 1 content".to_string(),
+            Focus::Content => {
+                "Content - j/k scroll | H/L back/fwd | / search | z focus | c chat".to_string()
+            }
+            Focus::Sidebar => "Sidebar - j/k navigate | Enter open | 2 content".to_string(),
             Focus::URLBar => "URL Bar - Enter go | Esc cancel".to_string(),
             Focus::TabBar => "Tab Bar - h/l switch | x close | Enter select".to_string(),
-            Focus::Bookmarks => "Bookmarks - j/k nav | Enter open | d delete | Esc close".to_string(),
-            Focus::History => "History - j/k nav | Enter open | Ctrl+C clear | Esc close".to_string(),
+            Focus::Bookmarks => {
+                "Bookmarks - j/k nav | Enter open | d delete | Esc close".to_string()
+            }
+            Focus::History => {
+                "History - j/k nav | Enter open | Ctrl+C clear | Esc close".to_string()
+            }
         };
     }
 }
@@ -1707,8 +1915,7 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
 
 /// Execute Brave Search API call
 fn brave_search(query: &str, count: usize) -> Result<String> {
-    let api_key = std::env::var("BRAVE_API_KEY")
-        .unwrap_or_default();
+    let api_key = std::env::var("BRAVE_API_KEY").unwrap_or_default();
 
     if api_key.is_empty() {
         return Ok("Error: BRAVE_API_KEY not set".to_string());
@@ -1718,7 +1925,7 @@ fn brave_search(query: &str, count: usize) -> Result<String> {
         .timeout(Duration::from_secs(30))
         .build()?;
 
-    let count = count.min(20).max(1);
+    let count = count.clamp(1, 20);
     let url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
         urlencoding::encode(query),
@@ -1739,15 +1946,28 @@ fn brave_search(query: &str, count: usize) -> Result<String> {
 
     // Extract web results
     let mut results = Vec::new();
-    if let Some(web) = json.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
+    if let Some(web) = json
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+    {
         for (i, result) in web.iter().take(count).enumerate() {
-            let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+            let title = result
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("No title");
             let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
-            let description = result.get("description").and_then(|d| d.as_str()).unwrap_or("No description");
+            let description = result
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("No description");
 
             results.push(format!(
                 "{}. **{}**\n   {}\n   {}\n",
-                i + 1, title, url, description
+                i + 1,
+                title,
+                url,
+                description
             ));
         }
     }
@@ -1755,7 +1975,11 @@ fn brave_search(query: &str, count: usize) -> Result<String> {
     if results.is_empty() {
         Ok("No results found".to_string())
     } else {
-        Ok(format!("## Search Results for: {}\n\n{}", query, results.join("\n")))
+        Ok(format!(
+            "## Search Results for: {}\n\n{}",
+            query,
+            results.join("\n")
+        ))
     }
 }
 
@@ -1802,7 +2026,9 @@ fn send_chat_message_with_tools(
 
     if !response.status().is_success() {
         let status = response.status();
-        let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .unwrap_or_else(|_| "Unknown error".to_string());
         anyhow::bail!("API error ({}): {}", status, error_text);
     }
 
@@ -1839,10 +2065,11 @@ fn send_chat_message_with_tools(
 fn query_rag_for_context(rag_url: &str, query: &str) -> String {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
-        .build() {
-            Ok(c) => c,
-            Err(_) => return "RAG unavailable".to_string(),
-        };
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return "RAG unavailable".to_string(),
+    };
 
     let request_body = serde_json::json!({
         "query": query,
@@ -1871,21 +2098,34 @@ fn query_rag_for_context(rag_url: &str, query: &str) -> String {
                     if !sources.is_empty() {
                         result.push_str("**Sources:**\n");
                         for (i, src) in sources.iter().take(5).enumerate() {
-                            let content = src.get("content")
+                            let content = src
+                                .get("content")
                                 .or_else(|| src.get("text"))
                                 .and_then(|c| c.as_str())
                                 .unwrap_or("");
-                            let doc_id = src.get("document_id")
+                            let doc_id = src
+                                .get("document_id")
                                 .or_else(|| src.get("id"))
                                 .and_then(|d| d.as_str())
                                 .unwrap_or("unknown");
-                            let score = src.get("similarity")
+                            let score = src
+                                .get("similarity")
                                 .or_else(|| src.get("score"))
                                 .and_then(|s| s.as_f64())
                                 .unwrap_or(0.0);
 
-                            let preview = if content.len() > 300 { &content[..300] } else { content };
-                            result.push_str(&format!("{}. [{}] (score: {:.2})\n   {}\n\n", i + 1, doc_id, score, preview));
+                            let preview = if content.len() > 300 {
+                                &content[..300]
+                            } else {
+                                content
+                            };
+                            result.push_str(&format!(
+                                "{}. [{}] (score: {:.2})\n   {}\n\n",
+                                i + 1,
+                                doc_id,
+                                score,
+                                preview
+                            ));
                         }
                     } else {
                         result.push_str("No sources found in RAG.\n");
@@ -1919,10 +2159,11 @@ fn query_exa_for_context(query: &str, api_key: Option<&str>) -> String {
 
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
-        .build() {
-            Ok(c) => c,
-            Err(_) => return String::new(),
-        };
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
 
     let request_body = serde_json::json!({
         "query": query,
@@ -1946,11 +2187,20 @@ fn query_exa_for_context(query: &str, api_key: Option<&str>) -> String {
                 let mut result = String::from("**Web Search Results (Exa):**\n\n");
                 if let Some(items) = json.get("results").and_then(|r| r.as_array()) {
                     for (i, item) in items.iter().take(5).enumerate() {
-                        let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+                        let title = item
+                            .get("title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("No title");
                         let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
                         let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("");
                         let preview = if text.len() > 300 { &text[..300] } else { text };
-                        result.push_str(&format!("{}. **{}**\n   {}\n   {}\n\n", i + 1, title, url, preview));
+                        result.push_str(&format!(
+                            "{}. **{}**\n   {}\n   {}\n\n",
+                            i + 1,
+                            title,
+                            url,
+                            preview
+                        ));
                     }
                     result
                 } else {
@@ -2043,8 +2293,7 @@ fn send_chat_simple(
 
 /// Execute Exa Search API call
 fn exa_search(query: &str, num_results: usize, use_autoprompt: bool) -> Result<String> {
-    let api_key = std::env::var("EXA_API_KEY")
-        .unwrap_or_default();
+    let api_key = std::env::var("EXA_API_KEY").unwrap_or_default();
 
     if api_key.is_empty() {
         return Ok("Error: EXA_API_KEY not set. Get one at https://exa.ai".to_string());
@@ -2054,7 +2303,7 @@ fn exa_search(query: &str, num_results: usize, use_autoprompt: bool) -> Result<S
         .timeout(Duration::from_secs(30))
         .build()?;
 
-    let num_results = num_results.min(10).max(1);
+    let num_results = num_results.clamp(1, 10);
 
     let request_body = serde_json::json!({
         "query": query,
@@ -2084,14 +2333,20 @@ fn exa_search(query: &str, num_results: usize, use_autoprompt: bool) -> Result<S
     let mut results = Vec::new();
     if let Some(items) = json.get("results").and_then(|r| r.as_array()) {
         for (i, result) in items.iter().take(num_results).enumerate() {
-            let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+            let title = result
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("No title");
             let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
             let text = result.get("text").and_then(|t| t.as_str()).unwrap_or("");
             let score = result.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
 
             results.push(format!(
                 "{}. **{}** (score: {:.2})\n   {}\n   {}\n",
-                i + 1, title, score, url,
+                i + 1,
+                title,
+                score,
+                url,
                 if text.len() > 200 { &text[..200] } else { text }
             ));
         }
@@ -2100,14 +2355,18 @@ fn exa_search(query: &str, num_results: usize, use_autoprompt: bool) -> Result<S
     if results.is_empty() {
         Ok("No results found".to_string())
     } else {
-        Ok(format!("## Exa Search: {}\n\n{}", query, results.join("\n")))
+        Ok(format!(
+            "## Exa Search: {}\n\n{}",
+            query,
+            results.join("\n")
+        ))
     }
 }
 
 /// Query local RAG system
 fn rag_query_tool(query: &str, top_k: usize) -> Result<String> {
-    let rag_url = std::env::var("RAG_BASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:3002".to_string());
+    let rag_url =
+        std::env::var("RAG_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3002".to_string());
 
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
@@ -2128,7 +2387,10 @@ fn rag_query_tool(query: &str, top_k: usize) -> Result<String> {
     match response {
         Ok(resp) if resp.status().is_success() => {
             let json: serde_json::Value = resp.json()?;
-            let answer = json.get("answer").and_then(|a| a.as_str()).unwrap_or("No answer");
+            let answer = json
+                .get("answer")
+                .and_then(|a| a.as_str())
+                .unwrap_or("No answer");
             let sources = json.get("sources").and_then(|s| s.as_array());
 
             let mut result = format!("## RAG Answer\n\n{}\n\n", answer);
@@ -2137,11 +2399,16 @@ fn rag_query_tool(query: &str, top_k: usize) -> Result<String> {
                 if !sources.is_empty() {
                     result.push_str("### Sources\n");
                     for (i, src) in sources.iter().take(3).enumerate() {
-                        let content = src.get("content")
+                        let content = src
+                            .get("content")
                             .or_else(|| src.get("text"))
                             .and_then(|c| c.as_str())
                             .unwrap_or("");
-                        let preview = if content.len() > 150 { &content[..150] } else { content };
+                        let preview = if content.len() > 150 {
+                            &content[..150]
+                        } else {
+                            content
+                        };
                         result.push_str(&format!("{}. {}\n", i + 1, preview));
                     }
                 }
@@ -2159,14 +2426,20 @@ fn execute_tool_call(
     context: &BrowserContext,
     tx: &Sender<AppMessage>,
 ) -> String {
-    let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)
-        .unwrap_or(serde_json::json!({}));
+    let args: serde_json::Value =
+        serde_json::from_str(&tool_call.function.arguments).unwrap_or(serde_json::json!({}));
 
     match tool_call.function.name.as_str() {
         "exa_search" => {
             if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
-                let num_results = args.get("num_results").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
-                let use_autoprompt = args.get("use_autoprompt").and_then(|v| v.as_bool()).unwrap_or(true);
+                let num_results = args
+                    .get("num_results")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(5) as usize;
+                let use_autoprompt = args
+                    .get("use_autoprompt")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
                 match exa_search(query, num_results, use_autoprompt) {
                     Ok(results) => results,
                     Err(e) => format!("Exa search error: {}", e),
@@ -2199,7 +2472,9 @@ fn execute_tool_call(
         }
         "navigate" => {
             if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
-                let _ = tx.send(AppMessage::ToolAction(ToolAction::Navigate(url.to_string())));
+                let _ = tx.send(AppMessage::ToolAction(ToolAction::Navigate(
+                    url.to_string(),
+                )));
                 format!("Navigating to: {}", url)
             } else {
                 "Error: Missing 'url' parameter".to_string()
@@ -2212,18 +2487,26 @@ fn execute_tool_call(
                     let _ = tx.send(AppMessage::ToolAction(ToolAction::FollowLink(idx)));
                     format!("Following link {}", link_num)
                 } else {
-                    format!("Error: Link {} not found. Available links: 1-{}", link_num, context.links.len())
+                    format!(
+                        "Error: Link {} not found. Available links: 1-{}",
+                        link_num,
+                        context.links.len()
+                    )
                 }
             } else {
                 "Error: Missing 'link_number' parameter".to_string()
             }
         }
         "scroll" => {
-            let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
+            let direction = args
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("down")
+                .to_string();
             let amount = args.get("amount").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
             let _ = tx.send(AppMessage::ToolAction(ToolAction::Scroll {
                 direction: direction.clone(),
-                amount
+                amount,
             }));
             format!("Scrolling {} by {} lines", direction, amount)
         }
@@ -2238,7 +2521,9 @@ fn execute_tool_call(
             if context.links.is_empty() {
                 "No links on current page.".to_string()
             } else {
-                let links_list: Vec<String> = context.links.iter()
+                let links_list: Vec<String> = context
+                    .links
+                    .iter()
                     .enumerate()
                     .map(|(i, (text, url))| format!("{}. {} ({})", i + 1, text, url))
                     .collect();
@@ -2263,7 +2548,7 @@ fn send_chat_message(
     base_url: &str,
     messages: &[ChatMessage],
     tx: &Sender<AppMessage>,
-) -> Result<String> {
+) -> Result<ChatResponseData> {
     // Convert our messages to OpenAI format
     let mut api_messages: Vec<OpenAIChatMessage> = messages
         .iter()
@@ -2284,7 +2569,8 @@ fn send_chat_message(
     let context = extract_browser_context(&api_messages);
 
     // Try with tools first, then without if it fails
-    let response = match send_chat_message_with_tools(api_key, model, base_url, &api_messages, true) {
+    let response = match send_chat_message_with_tools(api_key, model, base_url, &api_messages, true)
+    {
         Ok(resp) => resp,
         Err(e) => {
             // Log the tool error and retry without tools
@@ -2294,11 +2580,19 @@ fn send_chat_message(
     };
 
     match response {
-        ChatApiResponse::Content(content) => Ok(content),
+        ChatApiResponse::Content(content) => Ok(ChatResponseData {
+            content,
+            tool_calls: Vec::new(),
+        }),
         ChatApiResponse::ToolCalls(tool_calls) => {
-            // Build a summary of tool calls for display
-            let tool_summary: Vec<String> = tool_calls.iter()
-                .map(|tc| format!("@ {}", tc.function.name))
+            // Convert API tool calls to chat tool calls for UI display
+            let chat_tool_calls: Vec<ChatToolCall> = tool_calls
+                .iter()
+                .map(|tc| ChatToolCall {
+                    name: tc.function.name.clone(),
+                    arguments: serde_json::from_str(&tc.function.arguments)
+                        .unwrap_or(serde_json::Value::Null),
+                })
                 .collect();
 
             // Execute tool calls and send results back
@@ -2311,10 +2605,8 @@ fn send_chat_message(
             api_messages.push(assistant_msg);
 
             // Execute each tool and add results
-            let mut tool_results: Vec<String> = Vec::new();
             for tool_call in &tool_calls {
                 let result = execute_tool_call(tool_call, &context, tx);
-                tool_results.push(format!("  -> {}", result));
                 api_messages.push(OpenAIChatMessage {
                     role: "tool".to_string(),
                     content: Some(result),
@@ -2324,23 +2616,17 @@ fn send_chat_message(
             }
 
             // Continue conversation without tools to get final response
-            let final_content = match send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)? {
-                ChatApiResponse::Content(content) => content,
-                ChatApiResponse::ToolCalls(_) => String::new(),
-            };
+            let final_content =
+                match send_chat_message_with_tools(api_key, model, base_url, &api_messages, false)?
+                {
+                    ChatApiResponse::Content(content) => content,
+                    ChatApiResponse::ToolCalls(_) => String::new(),
+                };
 
-            // Combine tool summary with final response
-            let mut full_response = tool_summary.join("\n");
-            if !tool_results.is_empty() {
-                full_response.push_str("\n");
-                full_response.push_str(&tool_results.join("\n"));
-            }
-            if !final_content.is_empty() {
-                full_response.push_str("\n\n");
-                full_response.push_str(&final_content);
-            }
-
-            Ok(full_response)
+            Ok(ChatResponseData {
+                content: final_content,
+                tool_calls: chat_tool_calls,
+            })
         }
     }
 }
@@ -2364,13 +2650,19 @@ fn extract_browser_context(messages: &[OpenAIChatMessage]) -> BrowserContext {
                         if line.starts_with("Current page:") {
                             let parts: Vec<&str> = line.split('(').collect();
                             if parts.len() >= 2 {
-                                context.title = parts[0].replace("Current page:", "").trim().to_string();
+                                context.title =
+                                    parts[0].replace("Current page:", "").trim().to_string();
                                 context.url = parts[1].trim_end_matches(')').to_string();
                             }
                         } else if line.starts_with("Content preview:") {
                             // Content follows after this line
                             let idx = content.find("Content preview:").unwrap_or(0);
-                            context.content = content[idx..].lines().skip(1).take(10).collect::<Vec<_>>().join("\n");
+                            context.content = content[idx..]
+                                .lines()
+                                .skip(1)
+                                .take(10)
+                                .collect::<Vec<_>>()
+                                .join("\n");
                         }
                     }
                 }
@@ -2387,7 +2679,7 @@ fn send_chat_message_with_fallback(
     models: &[String],
     messages: &[ChatMessage],
     tx: &Sender<AppMessage>,
-) -> Result<String> {
+) -> Result<ChatResponseData> {
     let mut errors = Vec::new();
 
     for (i, model) in models.iter().enumerate() {

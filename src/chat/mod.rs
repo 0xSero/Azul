@@ -65,6 +65,19 @@ impl ChatMessage {
         }
     }
 
+    pub fn new_assistant_with_tools(content: String, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content,
+            timestamp: Utc::now(),
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
+        }
+    }
+
     pub fn new_system(content: String) -> Self {
         Self {
             role: Role::System,
@@ -100,7 +113,8 @@ impl ChatSession {
              - **Local RAG** - Your ingested documents & code\n\
              - **Exa Search** - AI-powered web search\n\
              - **Browser** - Navigate, read pages, follow links\n\n\
-             Ask me anything and I'll search for the best answer!".to_string()
+             Ask me anything and I'll search for the best answer!"
+                .to_string(),
         ));
 
         session
@@ -155,7 +169,8 @@ You help users find and synthesize information from multiple sources. ALWAYS use
 - RAG: filename.md
 ```"#;
 
-        self.messages.push(ChatMessage::new_system(system_prompt.to_string()));
+        self.messages
+            .push(ChatMessage::new_system(system_prompt.to_string()));
     }
 
     pub fn add_user_message(&mut self, content: String) {
@@ -164,6 +179,11 @@ You help users find and synthesize information from multiple sources. ALWAYS use
 
     pub fn add_assistant_message(&mut self, content: String) {
         self.messages.push(ChatMessage::new_assistant(content));
+    }
+
+    pub fn add_assistant_message_with_tools(&mut self, content: String, tool_calls: Vec<ToolCall>) {
+        self.messages
+            .push(ChatMessage::new_assistant_with_tools(content, tool_calls));
     }
 
     pub fn set_model(&mut self, model: String) {
@@ -214,7 +234,8 @@ impl BrowserContext {
             title: p.title.clone(),
             url: p.url.clone(),
             links_count: p.links.len(),
-            content_preview: p.content_lines
+            content_preview: p
+                .content_lines
                 .iter()
                 .take(10)
                 .cloned()

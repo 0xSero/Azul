@@ -4,13 +4,13 @@ pub use page::{Link, Page};
 
 use anyhow::{Context, Result};
 use headless_chrome::{Browser as ChromeBrowser, LaunchOptions};
+use regex::Regex;
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use std::collections::HashSet;
-use std::time::Duration;
 use std::sync::OnceLock;
+use std::time::Duration;
 use url::Url;
-use regex::Regex;
 
 pub struct Browser {
     client: Client,
@@ -41,6 +41,11 @@ impl Browser {
 
     /// Fetch a page with the specified render mode
     pub fn fetch_with_mode(&self, url: &str, mode: RenderMode) -> Result<Page> {
+        #[cfg(feature = "fixture-mode")]
+        if let Some(page) = crate::fixtures::load_page_for_url(url)? {
+            return Ok(page);
+        }
+
         match mode {
             RenderMode::Static => self.fetch(url),
             RenderMode::JavaScript => self.fetch_with_js(url),
@@ -119,8 +124,7 @@ impl Browser {
             .context("Failed to navigate to URL")?;
 
         // Wait for network to be mostly idle (page loaded)
-        tab.wait_until_navigated()
-            .context("Page failed to load")?;
+        tab.wait_until_navigated().context("Page failed to load")?;
 
         // Give JS a moment to render
         std::thread::sleep(Duration::from_millis(500));
@@ -129,9 +133,7 @@ impl Browser {
         let final_url = tab.get_url();
 
         // Get the rendered HTML content
-        let html_content = tab
-            .get_content()
-            .context("Failed to get page content")?;
+        let html_content = tab.get_content().context("Failed to get page content")?;
 
         // Parse the rendered HTML
         let document = Html::parse_document(&html_content);
@@ -182,7 +184,8 @@ impl Browser {
         let content_lines = if is_wikipedia {
             extract_wikipedia_reading_lines(&self.client, &document, &base_url)
         } else {
-            let reading_html = extract_main_html(&document, is_wikipedia).unwrap_or_else(|| html_content.clone());
+            let reading_html =
+                extract_main_html(&document, is_wikipedia).unwrap_or_else(|| html_content.clone());
             let content = html2text::from_read(reading_html.as_bytes(), 2000);
             let lines: Vec<String> = content
                 .lines()
@@ -296,7 +299,7 @@ impl Browser {
             let image_type = if content_type.contains("image/") {
                 content_type.split('/').nth(1).unwrap_or("unknown")
             } else {
-                url_lower.split('.').last().unwrap_or("unknown")
+                url_lower.split('.').next_back().unwrap_or("unknown")
             };
             let image_bytes = response.bytes().context("Failed to read image bytes")?;
             let art = render_image_with_chafa(&image_bytes, 80, 32)
@@ -445,7 +448,8 @@ impl Browser {
         let content_lines = if is_wikipedia {
             extract_wikipedia_reading_lines(&self.client, &document, &base_url)
         } else {
-            let reading_html = extract_main_html(&document, is_wikipedia).unwrap_or_else(|| html_content.clone());
+            let reading_html =
+                extract_main_html(&document, is_wikipedia).unwrap_or_else(|| html_content.clone());
             let content = html2text::from_read(reading_html.as_bytes(), 2000);
             let lines: Vec<String> = content
                 .lines()
@@ -541,7 +545,11 @@ fn best_image_url_from_el(el: &scraper::ElementRef<'_>, base_url: &Url) -> Optio
 fn parse_srcset_best_url(srcset: &str) -> Option<String> {
     // Pick the last entry, which is typically the largest image.
     // Format: "url1 1x, url2 2x" or "url 320w, url 640w"
-    let last = srcset.split(',').map(str::trim).filter(|s| !s.is_empty()).last()?;
+    let last = srcset
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .next_back()?;
     let url = last.split_whitespace().next()?;
     Some(url.to_string())
 }
@@ -565,7 +573,9 @@ fn append_images_section(lines: &mut Vec<String>, images: &[ImageRef]) {
 
 fn sanitize_markdown_text(s: &str) -> String {
     // Keep it simple: avoid breaking the ![alt](url) structure.
-    s.replace('[', "(").replace(']', ")").replace('\n', " ").replace('\r', " ")
+    s.replace('[', "(")
+        .replace(']', ")")
+        .replace(['\n', '\r'], " ")
 }
 
 fn sanitize_text_line(s: &str) -> String {
@@ -587,7 +597,7 @@ fn sanitize_text_line(s: &str) -> String {
 
 fn filename_from_url(url: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
-    let seg = parsed.path_segments()?.last()?;
+    let seg = parsed.path_segments()?.next_back()?;
     let seg = seg.trim();
     if seg.is_empty() {
         None
@@ -833,10 +843,10 @@ fn prune_non_main_lines(lines: Vec<String>, is_wikipedia: bool) -> Vec<String> {
             continue;
         }
 
-        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            if !trimmed.contains(' ') {
-                continue;
-            }
+        if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+            && !trimmed.contains(' ')
+        {
+            continue;
         }
 
         if re_footnote_url.is_match(trimmed) || re_md_refdef.is_match(trimmed) {
@@ -878,7 +888,11 @@ fn prune_non_main_lines(lines: Vec<String>, is_wikipedia: bool) -> Vec<String> {
     out
 }
 
-fn extract_wikipedia_reading_lines(client: &Client, document: &Html, base_url: &Url) -> Vec<String> {
+fn extract_wikipedia_reading_lines(
+    client: &Client,
+    document: &Html,
+    base_url: &Url,
+) -> Vec<String> {
     let title = Selector::parse("h1#firstHeading")
         .ok()
         .and_then(|sel| document.select(&sel).next())
@@ -1096,18 +1110,16 @@ fn strip_wikipedia_inline_annotations(text: &str) -> String {
     // "[ note 4 ]"         -> remove note markers
     let re_cite_ts = RE_CITE_TS
         .get_or_init(|| Regex::new(r"\[\s*\d+\s*\]\s*:\s*\d{1,2}:\d{2}").expect("valid regex"));
-    let re_cite_num = RE_CITE_NUM
-        .get_or_init(|| Regex::new(r"\[\s*\d+\s*\]").expect("valid regex"));
-    let re_cite_note = RE_CITE_NOTE
-        .get_or_init(|| Regex::new(r"(?i)\[\s*note\s*\d+\s*\]").expect("valid regex"));
-    let re_cite_word = RE_CITE_WORD
-        .get_or_init(|| Regex::new(r"(?i)\[\s*(citation needed|clarification needed)\s*\]").expect("valid regex"));
-    let re_punct = RE_PUNCT
-        .get_or_init(|| Regex::new(r"\s+([,.;:!?])").expect("valid regex"));
-    let re_paren_open = RE_PAREN_OPEN
-        .get_or_init(|| Regex::new(r"\(\s+").expect("valid regex"));
-    let re_paren_close = RE_PAREN_CLOSE
-        .get_or_init(|| Regex::new(r"\s+\)").expect("valid regex"));
+    let re_cite_num =
+        RE_CITE_NUM.get_or_init(|| Regex::new(r"\[\s*\d+\s*\]").expect("valid regex"));
+    let re_cite_note =
+        RE_CITE_NOTE.get_or_init(|| Regex::new(r"(?i)\[\s*note\s*\d+\s*\]").expect("valid regex"));
+    let re_cite_word = RE_CITE_WORD.get_or_init(|| {
+        Regex::new(r"(?i)\[\s*(citation needed|clarification needed)\s*\]").expect("valid regex")
+    });
+    let re_punct = RE_PUNCT.get_or_init(|| Regex::new(r"\s+([,.;:!?])").expect("valid regex"));
+    let re_paren_open = RE_PAREN_OPEN.get_or_init(|| Regex::new(r"\(\s+").expect("valid regex"));
+    let re_paren_close = RE_PAREN_CLOSE.get_or_init(|| Regex::new(r"\s+\)").expect("valid regex"));
 
     let mut s = re_cite_ts.replace_all(text, "").to_string();
     s = re_cite_note.replace_all(&s, "").to_string();
@@ -1149,7 +1161,12 @@ fn append_inline_image_block(
     out.push(String::new());
 }
 
-fn try_render_inline_image(client: &Client, url: &str, max_w: u16, max_h: u16) -> Option<Vec<String>> {
+fn try_render_inline_image(
+    client: &Client,
+    url: &str,
+    max_w: u16,
+    max_h: u16,
+) -> Option<Vec<String>> {
     let resp = client.get(url).send().ok()?;
     let bytes = resp.bytes().ok()?;
     render_image_with_chafa(&bytes, max_w, max_h).ok()
@@ -1171,17 +1188,16 @@ fn extract_pdf_text(pdf_bytes: &[u8]) -> Result<String> {
     let pdf_path = temp_dir.join(format!("azul_pdf_{}.pdf", std::process::id()));
 
     // Write PDF to temp file
-    let mut file = std::fs::File::create(&pdf_path)
-        .context("Failed to create temp PDF file")?;
+    let mut file = std::fs::File::create(&pdf_path).context("Failed to create temp PDF file")?;
     file.write_all(pdf_bytes)
         .context("Failed to write PDF to temp file")?;
     drop(file);
 
     // Run pdftotext to extract text (- means stdout)
     let output = Command::new("pdftotext")
-        .arg("-layout")  // Maintain layout
+        .arg("-layout") // Maintain layout
         .arg(&pdf_path)
-        .arg("-")        // Output to stdout
+        .arg("-") // Output to stdout
         .output();
 
     // Clean up temp file
@@ -1220,6 +1236,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "network-tests")]
+    #[ignore = "network-bound; run with --features network-tests -- --ignored"]
     fn test_fetch_example_com() {
         let browser = Browser::new().unwrap();
         let page = browser.fetch("https://example.com");
@@ -1234,11 +1252,11 @@ mod tests {
     fn test_resolve_url() {
         let base = Url::parse("https://example.com/path/page.html").unwrap();
 
+        assert_eq!(resolve_url(&base, "https://other.com"), "https://other.com");
         assert_eq!(
-            resolve_url(&base, "https://other.com"),
-            "https://other.com"
+            resolve_url(&base, "//cdn.example.com"),
+            "https://cdn.example.com"
         );
-        assert_eq!(resolve_url(&base, "//cdn.example.com"), "https://cdn.example.com");
         assert_eq!(
             resolve_url(&base, "/absolute/path"),
             "https://example.com/absolute/path"

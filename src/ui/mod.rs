@@ -1,4 +1,5 @@
 pub mod markdown;
+pub mod panes;
 pub mod shadow;
 pub mod theme;
 
@@ -16,31 +17,32 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Focus, PanelMode, ViewMode};
 use crate::mascot;
 use markdown::StyledMarkdown;
+use panes::PaneContext;
 
 // OpenCode-inspired clean dark theme - minimal, professional
 // Background layers with clear hierarchy
-pub const BG_BASE: Color = Color::Rgb(17, 17, 19);            // Deep dark #111113
-pub const BG_SURFACE: Color = Color::Rgb(24, 24, 27);         // Panel surface #18181b
-pub const BG_ELEVATED: Color = Color::Rgb(32, 32, 36);        // Elevated/focused #202024
-pub const BG_HIGHLIGHT: Color = Color::Rgb(45, 45, 50);       // Selection highlight #2d2d32
+pub const BG_BASE: Color = Color::Rgb(17, 17, 19); // Deep dark #111113
+pub const BG_SURFACE: Color = Color::Rgb(24, 24, 27); // Panel surface #18181b
+pub const BG_ELEVATED: Color = Color::Rgb(32, 32, 36); // Elevated/focused #202024
+pub const BG_HIGHLIGHT: Color = Color::Rgb(45, 45, 50); // Selection highlight #2d2d32
 
 // Border colors - subtle, clean lines
-pub const BORDER_DIM: Color = Color::Rgb(40, 40, 45);         // Subtle separator #28282d
-pub const BORDER_DEFAULT: Color = Color::Rgb(55, 55, 62);     // Normal border #37373e
-pub const BORDER_BRIGHT: Color = Color::Rgb(82, 139, 255);    // Focus blue #528bff
+pub const BORDER_DIM: Color = Color::Rgb(40, 40, 45); // Subtle separator #28282d
+pub const BORDER_DEFAULT: Color = Color::Rgb(55, 55, 62); // Normal border #37373e
+pub const BORDER_BRIGHT: Color = Color::Rgb(82, 139, 255); // Focus blue #528bff
 
 // Accent colors - clean and modern
-pub const ACCENT_PRIMARY: Color = Color::Rgb(82, 139, 255);   // Primary blue #528bff
+pub const ACCENT_PRIMARY: Color = Color::Rgb(82, 139, 255); // Primary blue #528bff
 pub const ACCENT_SECONDARY: Color = Color::Rgb(150, 120, 200); // Purple #9678c8
-pub const ACCENT_SUCCESS: Color = Color::Rgb(80, 200, 120);   // Green #50c878
-pub const ACCENT_WARNING: Color = Color::Rgb(255, 180, 80);   // Orange #ffb450
-pub const ACCENT_ERROR: Color = Color::Rgb(255, 100, 100);    // Red #ff6464
-pub const ACCENT_INFO: Color = Color::Rgb(100, 180, 255);     // Light blue #64b4ff
+pub const ACCENT_SUCCESS: Color = Color::Rgb(80, 200, 120); // Green #50c878
+pub const ACCENT_WARNING: Color = Color::Rgb(255, 180, 80); // Orange #ffb450
+pub const ACCENT_ERROR: Color = Color::Rgb(255, 100, 100); // Red #ff6464
+pub const ACCENT_INFO: Color = Color::Rgb(100, 180, 255); // Light blue #64b4ff
 
 // Text colors - clean whites and grays
-pub const TEXT_PRIMARY: Color = Color::Rgb(229, 231, 235);    // Near white #e5e7eb
-pub const TEXT_SECONDARY: Color = Color::Rgb(156, 163, 175);  // Gray #9ca3af
-pub const TEXT_DIM: Color = Color::Rgb(107, 114, 128);        // Muted gray #6b7280
+pub const TEXT_PRIMARY: Color = Color::Rgb(229, 231, 235); // Near white #e5e7eb
+pub const TEXT_SECONDARY: Color = Color::Rgb(156, 163, 175); // Gray #9ca3af
+pub const TEXT_DIM: Color = Color::Rgb(107, 114, 128); // Muted gray #6b7280
 
 // Legacy aliases
 pub const AZUL_BLUE: Color = ACCENT_PRIMARY;
@@ -64,11 +66,7 @@ pub fn pulsing_focus_color(phase: u8) -> Color {
     // Base color is ACCENT_PRIMARY blue: RGB(82, 139, 255)
     // Pulse between 70% and 100% brightness
     let factor = 0.7 + (intensity * 0.3);
-    Color::Rgb(
-        (82.0 * factor) as u8 + 40,
-        (139.0 * factor) as u8 + 30,
-        255,
-    )
+    Color::Rgb((82.0 * factor) as u8 + 40, (139.0 * factor) as u8 + 30, 255)
 }
 
 /// Panel background - consistent dark base for all panels (no distracting highlight changes)
@@ -99,11 +97,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),   // Tab bar
-            Constraint::Length(3),   // URL bar
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(0),      // Main content
-            Constraint::Length(2),   // Status bar (compact)
+            Constraint::Length(1), // Tab bar
+            Constraint::Length(3), // URL bar
+            Constraint::Length(1), // Spacer
+            Constraint::Min(0),    // Main content
+            Constraint::Length(2), // Status bar (compact)
         ])
         .split(inner);
 
@@ -112,26 +110,21 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // chunks[2] is spacer - empty
 
     let content_area = chunks[3];
-    if app.zen_mode {
-        render_content_only(frame, content_area, app);
-    } else {
-        // 3-panel layout with gaps: Links | Content | Chat
-        let split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(12),  // Links (left)
-                Constraint::Length(1),       // Gap
-                Constraint::Percentage(58),  // Content (middle) - prioritize reading
-                Constraint::Length(1),       // Gap
-                Constraint::Percentage(28),  // Chat (right)
-            ])
-            .split(content_area);
+    let context = PaneContext {
+        focus: app.focus,
+        chat_focused: app.chat_focused,
+        hard_content: app.is_hard_content(),
+    };
+    let layout = app.panes.layout(content_area, context);
 
-        render_compact_sidebar(frame, split[0], app);
-        // split[1] is gap
-        render_content_only(frame, split[2], app);
-        // split[3] is gap
-        render_chat_side_panel(frame, split[4], app);
+    if let Some(sidebar) = layout.sidebar {
+        render_compact_sidebar(frame, sidebar, app);
+    }
+    if let Some(content) = layout.content {
+        render_content_only(frame, content, app);
+    }
+    if let Some(assistant) = layout.assistant {
+        render_chat_side_panel(frame, assistant, app);
     }
 
     render_status_bar(frame, chunks[4], app);
@@ -165,18 +158,27 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
         let title = tab.display_title(15);
 
         let style = if is_active {
-            Style::default().fg(BG_BASE).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(BG_BASE)
+                .bg(AZUL_BLUE)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(TOKYO_TEXT).bg(bg_color)
         };
 
         // Tab number
-        spans.push(Span::styled(format!(" {} ", i + 1), Style::default().fg(TOKYO_COMMENT).bg(bg_color)));
+        spans.push(Span::styled(
+            format!(" {} ", i + 1),
+            Style::default().fg(TOKYO_COMMENT).bg(bg_color),
+        ));
         // Tab title
         spans.push(Span::styled(title, style));
 
         if tab.loading {
-            spans.push(Span::styled(" *", Style::default().fg(TOKYO_ORANGE).bg(bg_color)));
+            spans.push(Span::styled(
+                " *",
+                Style::default().fg(TOKYO_ORANGE).bg(bg_color),
+            ));
         }
 
         spans.push(Span::styled(" |", Style::default().bg(bg_color)));
@@ -184,12 +186,14 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
 
     // Add new tab hint if not full
     if !app.tabs.is_full() {
-        spans.push(Span::styled(" + (t)", Style::default().fg(TOKYO_COMMENT).bg(bg_color)));
+        spans.push(Span::styled(
+            " + (t)",
+            Style::default().fg(TOKYO_COMMENT).bg(bg_color),
+        ));
     }
 
     let line = Line::from(spans);
-    let paragraph = Paragraph::new(line)
-        .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
+    let paragraph = Paragraph::new(line).style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
 
     frame.render_widget(paragraph, area);
 }
@@ -208,7 +212,10 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     let title = vec![
         Span::styled(companion, Style::default().fg(AZUL_BLUE)),
         Span::raw(" "),
-        Span::styled("azul", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "azul",
+            Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD),
+        ),
         bookmark_indicator,
     ];
 
@@ -252,7 +259,9 @@ fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
 
     // Title style changes with focus
     let title_style = if is_focused {
-        Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_PRIMARY)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(TEXT_DIM)
     };
@@ -265,12 +274,19 @@ fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
                 .border_style(Style::default().fg(border_color))
                 .style(Style::default().bg(bg_color))
                 .title(Span::styled(
-                    if is_focused { " URL (editing) " } else { " URL " },
+                    if is_focused {
+                        " URL (editing) "
+                    } else {
+                        " URL "
+                    },
                     title_style,
                 )),
         )
         .style(if is_focused {
-            Style::default().fg(ACCENT_PRIMARY).bg(bg_color).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .bg(bg_color)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(TEXT_PRIMARY).bg(bg_color)
         });
@@ -280,15 +296,15 @@ fn render_url_bar(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_main_content(frame: &mut Frame, area: Rect, app: &mut App) {
     // Split into content and sidebar
-    let has_sidebar = app.current_page().map(|p| !p.links.is_empty()).unwrap_or(false);
+    let has_sidebar = app
+        .current_page()
+        .map(|p| !p.links.is_empty())
+        .unwrap_or(false);
 
     if has_sidebar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(70),
-                Constraint::Percentage(30),
-            ])
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(area);
 
         render_content_area(frame, chunks[0], app);
@@ -321,7 +337,9 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
     // Title style changes with focus
     let title_style = if is_focused {
-        Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_PRIMARY)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(TEXT_DIM)
     };
@@ -346,8 +364,14 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(page) = app.current_page() {
         // Inner area excluding borders and a small gutter
         let inner = area
-            .inner(Margin { horizontal: 1, vertical: 1 })
-            .inner(Margin { horizontal: 1, vertical: 0 });
+            .inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            })
+            .inner(Margin {
+                horizontal: 1,
+                vertical: 0,
+            });
 
         // Optimal reading column: 66-72 chars for readability (research-backed)
         // See: https://baymard.com/blog/line-length-readability
@@ -375,10 +399,7 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
 
         // Prepend AI summary if available
         if let Some(summary) = &app.ai_summary {
-            let mut summary_lines = vec![
-                "# AI Summary".to_string(),
-                String::new(),
-            ];
+            let mut summary_lines = vec!["# AI Summary".to_string(), String::new()];
             for wrapped in textwrap::wrap(summary, wrap_width) {
                 summary_lines.push(wrapped.into_owned());
             }
@@ -399,8 +420,7 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
         // Use styled markdown rendering for rendered view
         let visible_lines: Vec<Line> = if app.view_mode == ViewMode::Rendered {
             let md_renderer = StyledMarkdown::new(wrap_width);
-            let styled = md_renderer.render(&lines[start..end].to_vec());
-            styled
+            md_renderer.render(&lines[start..end])
         } else {
             // Raw view - plain text
             lines[start..end]
@@ -422,8 +442,14 @@ fn render_content_area(frame: &mut Frame, area: Rect, app: &App) {
             .alignment(Alignment::Center);
 
         let inner = area
-            .inner(Margin { horizontal: 1, vertical: 1 })
-            .inner(Margin { horizontal: 2, vertical: 1 });
+            .inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            })
+            .inner(Margin {
+                horizontal: 2,
+                vertical: 1,
+            });
         frame.render_widget(placeholder, inner);
     }
 }
@@ -451,7 +477,10 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
         .style(Style::default().bg(bg_color));
 
     if let Some(page) = app.current_page() {
-        let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
         let mut visible_rows = inner.height.saturating_sub(1) as usize;
         if visible_rows == 0 {
             visible_rows = 1;
@@ -491,7 +520,9 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
                 } else if is_selected {
                     (
                         Style::default().fg(TEXT_SECONDARY),
-                        Style::default().fg(TEXT_PRIMARY).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(TEXT_PRIMARY)
+                            .add_modifier(Modifier::BOLD),
                     )
                 } else {
                     (
@@ -535,7 +566,9 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
 
     // Title style changes with focus
     let title_style = if is_focused {
-        Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_PRIMARY)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(TEXT_DIM)
     };
@@ -551,7 +584,10 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
 
     if let Some(page) = app.current_page() {
         // Increased padding: horizontal 2, vertical 2
-        let inner = area.inner(Margin { horizontal: 2, vertical: 2 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 2,
+        });
         let mut visible_rows = inner.height.saturating_sub(1) as usize;
         if visible_rows == 0 {
             visible_rows = 1;
@@ -577,15 +613,24 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
                 let style = if is_selected && is_focused {
                     Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    Style::default().fg(TEXT_PRIMARY).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(TEXT_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(TEXT_SECONDARY)
                 };
 
                 // Show number + truncated link text
-                let text = if link.text.is_empty() { &link.url } else { &link.text };
+                let text = if link.text.is_empty() {
+                    &link.url
+                } else {
+                    &link.text
+                };
                 let truncated = truncate_to_width(text, max_text_width);
-                ListItem::new(Line::from(Span::styled(format!("{:2} {}", i + 1, truncated), style)))
+                ListItem::new(Line::from(Span::styled(
+                    format!("{:2} {}", i + 1, truncated),
+                    style,
+                )))
             })
             .collect();
 
@@ -624,8 +669,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut App) {
         Span::styled(" quit", Style::default().fg(TEXT_DIM)),
     ]);
 
-    let status = Paragraph::new(status_line)
-        .style(Style::default().bg(BG_BASE));
+    let status = Paragraph::new(status_line).style(Style::default().bg(BG_BASE));
 
     frame.render_widget(status, area);
 }
@@ -648,10 +692,12 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(2, 2, 1, 1))  // Generous padding
+        .padding(Padding::new(2, 2, 1, 1)) // Generous padding
         .title(Span::styled(
             format!(" Bookmarks ({}) ", app.bookmarks_list.len()),
-            Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Span::styled(
             " j/k scroll  Enter open  d del  Esc close ",
@@ -660,7 +706,10 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().bg(bg_color));
 
     // Generous padding: horizontal 3, vertical 2
-    let inner = panel_area.inner(Margin { horizontal: 3, vertical: 2 });
+    let inner = panel_area.inner(Margin {
+        horizontal: 3,
+        vertical: 2,
+    });
     let visible_rows = inner.height.saturating_sub(1) as usize;
 
     if app.bookmarks_list.is_empty() {
@@ -678,7 +727,8 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
         offset = app.bookmarks_selected + 1 - visible_rows;
     }
 
-    let items: Vec<ListItem> = app.bookmarks_list
+    let items: Vec<ListItem> = app
+        .bookmarks_list
         .iter()
         .enumerate()
         .skip(offset)
@@ -686,7 +736,10 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, bookmark)| {
             let is_selected = i == app.bookmarks_selected;
             let style = if is_selected {
-                Style::default().fg(BG_BASE).bg(AZUL_BLUE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(BG_BASE)
+                    .bg(AZUL_BLUE)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(TOKYO_TEXT).bg(bg_color)
             };
@@ -696,7 +749,10 @@ fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
 
             ListItem::new(vec![
                 Line::from(Span::styled(format!("  {} ", title), style)),
-                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT).bg(bg_color))),
+                Line::from(Span::styled(
+                    format!("    {}", url),
+                    Style::default().fg(TOKYO_COMMENT).bg(bg_color),
+                )),
             ])
         })
         .collect();
@@ -726,10 +782,12 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(2, 2, 1, 1))  // Generous padding
+        .padding(Padding::new(2, 2, 1, 1)) // Generous padding
         .title(Span::styled(
             format!(" History ({}) ", app.history_list.len()),
-            Style::default().fg(ACCENT_SECONDARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_SECONDARY)
+                .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Span::styled(
             " j/k scroll  Enter open  Esc close ",
@@ -738,7 +796,10 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().bg(bg_color));
 
     // Generous padding: horizontal 3, vertical 2
-    let inner = panel_area.inner(Margin { horizontal: 3, vertical: 2 });
+    let inner = panel_area.inner(Margin {
+        horizontal: 3,
+        vertical: 2,
+    });
     let visible_rows = inner.height.saturating_sub(1) as usize;
 
     if app.history_list.is_empty() {
@@ -755,7 +816,8 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
         offset = app.history_selected + 1 - visible_rows;
     }
 
-    let items: Vec<ListItem> = app.history_list
+    let items: Vec<ListItem> = app
+        .history_list
         .iter()
         .enumerate()
         .skip(offset)
@@ -763,7 +825,10 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, entry)| {
             let is_selected = i == app.history_selected;
             let style = if is_selected {
-                Style::default().fg(BG_BASE).bg(TOKYO_PURPLE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(BG_BASE)
+                    .bg(TOKYO_PURPLE)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(TOKYO_TEXT).bg(bg_color)
             };
@@ -773,7 +838,10 @@ fn render_history_panel(frame: &mut Frame, area: Rect, app: &App) {
 
             ListItem::new(vec![
                 Line::from(Span::styled(format!("  {} ", title), style)),
-                Line::from(Span::styled(format!("    {}", url), Style::default().fg(TOKYO_COMMENT).bg(bg_color))),
+                Line::from(Span::styled(
+                    format!("    {}", url),
+                    Style::default().fg(TOKYO_COMMENT).bg(bg_color),
+                )),
             ])
         })
         .collect();
@@ -806,11 +874,19 @@ fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(vec![
             Span::styled(companion, Style::default().fg(AZUL_BLUE)),
             Span::raw(" "),
-            Span::styled("azul", Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "azul",
+                Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" help", Style::default().fg(TOKYO_TEXT)),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled("navigate", Style::default().fg(TOKYO_ORANGE).add_modifier(Modifier::BOLD))]),
+        Line::from(vec![Span::styled(
+            "navigate",
+            Style::default()
+                .fg(TOKYO_ORANGE)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  /        search or URL"),
         Line::from("  H L      back / forward"),
         Line::from("  j k      scroll line"),
@@ -820,32 +896,51 @@ fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
         Line::from("  g G      top / bottom"),
         Line::from("  Tab      cycle focus"),
         Line::from(""),
-        Line::from(vec![Span::styled("tabs", Style::default().fg(TOKYO_PURPLE).add_modifier(Modifier::BOLD))]),
+        Line::from(vec![Span::styled(
+            "tabs",
+            Style::default()
+                .fg(TOKYO_PURPLE)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  t        new tab"),
         Line::from("  Ctrl+W   close"),
         Line::from("  1-9      switch"),
         Line::from(""),
-        Line::from(vec![Span::styled("tools", Style::default().fg(TOKYO_GREEN).add_modifier(Modifier::BOLD))]),
+        Line::from(vec![Span::styled(
+            "tools",
+            Style::default()
+                .fg(TOKYO_GREEN)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  b        bookmarks"),
         Line::from("  B        bookmark page"),
         Line::from("  H        history"),
         Line::from("  r        rag panel"),
         Line::from("  m        memory panel"),
-        Line::from("  c        chat"),
+        Line::from("  c        chat panel"),
         Line::from("  s        summarize"),
         Line::from(""),
-        Line::from(vec![Span::styled("other", Style::default().fg(TOKYO_BLUE).add_modifier(Modifier::BOLD))]),
+        Line::from(vec![Span::styled(
+            "other",
+            Style::default().fg(TOKYO_BLUE).add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  v        raw view"),
         Line::from("  f        reflow text"),
-        Line::from("  z        zen mode"),
+        Line::from("  z        focus mode"),
         Line::from("  r        reload"),
         Line::from("  ?        this help"),
         Line::from("  q        quit"),
         Line::from(""),
-        Line::from(vec![Span::styled("tips", Style::default().fg(TOKYO_COMMENT))]),
+        Line::from(vec![Span::styled(
+            "tips",
+            Style::default().fg(TOKYO_COMMENT),
+        )]),
         Line::from("  Open [img] links to render images"),
         Line::from(""),
-        Line::from(vec![Span::styled("esc to close", Style::default().fg(TOKYO_COMMENT))]),
+        Line::from(vec![Span::styled(
+            "esc to close",
+            Style::default().fg(TOKYO_COMMENT),
+        )]),
     ];
 
     let help = Paragraph::new(help_text)
@@ -854,10 +949,12 @@ fn render_help_panel(frame: &mut Frame, area: Rect, app: &App) {
                 .borders(Borders::ALL)
                 .border_set(border::ROUNDED)
                 .border_style(Style::default().fg(border_color))
-                .padding(Padding::new(3, 3, 1, 1))  // Extra generous padding for help
+                .padding(Padding::new(3, 3, 1, 1)) // Extra generous padding for help
                 .title(Span::styled(
                     format!(" {} azul ", companion),
-                    Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(ACCENT_PRIMARY)
+                        .add_modifier(Modifier::BOLD),
                 ))
                 .title_bottom(Span::styled(" Esc close ", Style::default().fg(TEXT_DIM)))
                 .style(Style::default().bg(bg_color)),
@@ -929,7 +1026,7 @@ fn format_lines(lines: &[String], max_width: usize) -> Vec<String> {
     };
 
     for line in lines {
-        let raw = line.trim_end_matches(|c| c == '\r' || c == '\n');
+        let raw = line.trim_end_matches(['\r', '\n']);
         let trimmed = raw.trim();
 
         // Code fences: preserve exactly and stop reflow inside.
@@ -996,23 +1093,26 @@ fn wrap_structured_line(raw: &str, max_width: usize) -> Vec<String> {
     let trimmed = raw.trim_end();
     let t = trimmed.trim_start();
 
-    if t.starts_with("> ") {
-        return wrap_with_prefix(trimmed, "> ", &t[2..], max_width);
+    if let Some(stripped) = t.strip_prefix("> ") {
+        return wrap_with_prefix(trimmed, "> ", stripped, max_width);
     }
-    if t.starts_with("- [ ] ") {
-        return wrap_list_like(trimmed, "- [ ] ", &t[6..], max_width);
+    if let Some(stripped) = t.strip_prefix("- [ ] ") {
+        return wrap_list_like(trimmed, "- [ ] ", stripped, max_width);
     }
-    if t.starts_with("- [x] ") || t.starts_with("- [X] ") {
-        return wrap_list_like(trimmed, "- [x] ", &t[6..], max_width);
+    if let Some(stripped) = t.strip_prefix("- [x] ") {
+        return wrap_list_like(trimmed, "- [x] ", stripped, max_width);
     }
-    if t.starts_with("- ") {
-        return wrap_list_like(trimmed, "- ", &t[2..], max_width);
+    if let Some(stripped) = t.strip_prefix("- [X] ") {
+        return wrap_list_like(trimmed, "- [x] ", stripped, max_width);
     }
-    if t.starts_with("* ") {
-        return wrap_list_like(trimmed, "* ", &t[2..], max_width);
+    if let Some(stripped) = t.strip_prefix("- ") {
+        return wrap_list_like(trimmed, "- ", stripped, max_width);
     }
-    if t.starts_with("+ ") {
-        return wrap_list_like(trimmed, "+ ", &t[2..], max_width);
+    if let Some(stripped) = t.strip_prefix("* ") {
+        return wrap_list_like(trimmed, "* ", stripped, max_width);
+    }
+    if let Some(stripped) = t.strip_prefix("+ ") {
+        return wrap_list_like(trimmed, "+ ", stripped, max_width);
     }
 
     if let Some(caps) = Regex::new(r"^(\\d+\\.\\s+)(.*)$")
@@ -1086,11 +1186,18 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Simple title with model name
-    let model_name = app.chat_session.as_ref()
+    let model_name = app
+        .chat_session
+        .as_ref()
         .map(|s| {
             let model = &s.model;
-            model.split('/').last().unwrap_or(model)
-                .split(':').next().unwrap_or(model)
+            model
+                .split('/')
+                .next_back()
+                .unwrap_or(model)
+                .split(':')
+                .next()
+                .unwrap_or(model)
         })
         .unwrap_or("chat");
 
@@ -1111,31 +1218,40 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.chat_session.is_none() {
         let tips = vec![
             Line::from(""),
-            Line::from(Span::styled("Press 'c' to start", Style::default().fg(TEXT_SECONDARY))),
+            Line::from(Span::styled(
+                "Press 'c' to start",
+                Style::default().fg(TEXT_SECONDARY),
+            )),
         ];
         let empty = Paragraph::new(tips)
             .style(Style::default().fg(TEXT_DIM).bg(bg_color))
             .alignment(Alignment::Center);
-        frame.render_widget(empty, area.inner(Margin { horizontal: 2, vertical: 2 }));
+        frame.render_widget(
+            empty,
+            area.inner(Margin {
+                horizontal: 2,
+                vertical: 2,
+            }),
+        );
         return;
     }
 
     // Tighter padding for better space usage
-    let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+    let inner = area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
     let wrap_width = inner.width.saturating_sub(1).max(20) as usize;
 
     // Calculate input height based on text length (with wrapping)
     let input_len = app.chat_input.len() + 3; // +3 for "> " and "_"
-    let input_lines = ((input_len / wrap_width.max(1)) + 1).max(1).min(6) as u16; // 1-6 lines
+    let input_lines = ((input_len / wrap_width.max(1)) + 1).clamp(1, 6) as u16; // 1-6 lines
     let input_height = input_lines + 2; // +2 for border
 
     // Split: messages | input
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(input_height),
-        ])
+        .constraints([Constraint::Min(0), Constraint::Length(input_height)])
         .split(inner);
 
     // Render messages with enhanced styling
@@ -1144,10 +1260,9 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
         let md_renderer = StyledMarkdown::new(wrap_width);
 
         // Define role-specific colors
-        let user_prefix_color = ACCENT_PRIMARY;          // Blue for user
+        let user_prefix_color = ACCENT_PRIMARY; // Blue for user
         let user_text_color = TEXT_PRIMARY;
-        let ai_prefix_color = ACCENT_SUCCESS;            // Green for AI
-        let tool_color = ACCENT_WARNING;                 // Orange for tools
+        let tool_color = ACCENT_WARNING; // Orange for tools
         let tool_result_color = TEXT_DIM;
 
         for msg in &session.messages {
@@ -1156,7 +1271,11 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
                 crate::chat::Role::User => {
                     // User message - compact, same line
                     let display_content = if msg.content.contains("[Browser Context]") {
-                        msg.content.split("\n\n").last().unwrap_or(&msg.content).to_string()
+                        msg.content
+                            .split("\n\n")
+                            .last()
+                            .unwrap_or(&msg.content)
+                            .to_string()
                     } else {
                         msg.content.clone()
                     };
@@ -1179,7 +1298,8 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
                     }
                     // AI message - render inline, no separate indicator line
                     if !msg.content.is_empty() {
-                        let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
+                        let content_lines: Vec<String> =
+                            msg.content.lines().map(String::from).collect();
                         let styled = md_renderer.render(&content_lines);
                         // Add small AI indicator to first line if present
                         if let Some(first) = styled.first() {
@@ -1192,13 +1312,13 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
                 }
                 crate::chat::Role::Tool => {
                     // Tool result - very compact
-                    let result_preview = truncate_to_width(&msg.content, wrap_width.saturating_sub(6));
+                    let result_preview =
+                        truncate_to_width(&msg.content, wrap_width.saturating_sub(6));
                     all_lines.push(Line::from(vec![
                         Span::styled("    ↳ ", Style::default().fg(tool_result_color)),
                         Span::styled(result_preview, Style::default().fg(tool_result_color)),
                     ]));
                 }
-                _ => {}
             }
         }
 
@@ -1240,8 +1360,7 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
             .take(visible_height)
             .collect();
 
-        let msg_para = Paragraph::new(visible)
-            .style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
+        let msg_para = Paragraph::new(visible).style(Style::default().fg(TOKYO_TEXT).bg(bg_color));
         frame.render_widget(msg_para, chunks[0]);
     }
 
@@ -1252,7 +1371,7 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().bg(BG_BASE));
 
     // Simple cursor - just show blinking when focused
-    let cursor = if app.chat_focused && (app.animation_tick / 8) % 2 == 0 {
+    let cursor = if app.chat_focused && (app.animation_tick / 8).is_multiple_of(2) {
         "│"
     } else {
         " "
@@ -1295,7 +1414,12 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().bg(bg_color));
 
     let settings_text = vec![
-        Line::from(vec![Span::styled("AI Configuration", Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD))]),
+        Line::from(vec![Span::styled(
+            "AI Configuration",
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
     ];
 
@@ -1317,7 +1441,7 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
         }
         if let Some(key) = &ai.api_key {
             let masked = if key.len() > 10 {
-                format!("{}...{}", &key[..7], &key[key.len()-4..])
+                format!("{}...{}", &key[..7], &key[key.len() - 4..])
             } else {
                 "***".to_string()
             };
@@ -1328,7 +1452,10 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
         }
         if let Some(models) = &ai.fallback_models {
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![Span::styled("  Fallback Models:", Style::default().fg(TOKYO_COMMENT))]));
+            lines.push(Line::from(vec![Span::styled(
+                "  Fallback Models:",
+                Style::default().fg(TOKYO_COMMENT),
+            )]));
             for m in models.iter().take(5) {
                 lines.push(Line::from(vec![
                     Span::raw("    - "),
@@ -1337,15 +1464,17 @@ fn render_settings_panel(frame: &mut Frame, area: Rect, app: &App) {
             }
         }
     } else {
-        lines.push(Line::from(vec![
-            Span::styled("  No AI configuration found", Style::default().fg(TOKYO_COMMENT)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  No AI configuration found",
+            Style::default().fg(TOKYO_COMMENT),
+        )]));
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("Edit ~/.config/azul/config.json to change settings", Style::default().fg(TOKYO_COMMENT)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "Edit ~/.config/azul/config.json to change settings",
+        Style::default().fg(TOKYO_COMMENT),
+    )]));
 
     let settings = Paragraph::new(lines)
         .block(block)
@@ -1380,25 +1509,38 @@ fn render_rag_panel(frame: &mut Frame, area: Rect, app: &App) {
         .padding(Padding::new(2, 2, 1, 1))
         .title(Span::styled(
             title,
-            Style::default().fg(ACCENT_INFO).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_INFO)
+                .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Span::styled(
-            if app.rag_loading { " searching...  Esc close " } else { " Enter search  j/k scroll  Esc close " },
+            if app.rag_loading {
+                " searching...  Esc close "
+            } else {
+                " Enter search  j/k scroll  Esc close "
+            },
             Style::default().fg(TEXT_DIM),
         ))
         .style(Style::default().bg(bg_color));
 
-    let inner = panel_area.inner(Margin { horizontal: 3, vertical: 2 });
+    let inner = panel_area.inner(Margin {
+        horizontal: 3,
+        vertical: 2,
+    });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Input area
-            Constraint::Min(0),     // Results area
+            Constraint::Length(3), // Input area
+            Constraint::Min(0),    // Results area
         ])
         .split(inner);
 
     // Input box - clean text, no inline spinners
-    let input_border_color = if app.rag_loading { ACCENT_SECONDARY } else { ACCENT_PRIMARY };
+    let input_border_color = if app.rag_loading {
+        ACCENT_SECONDARY
+    } else {
+        ACCENT_PRIMARY
+    };
     let input_text = if app.rag_loading {
         "Searching...".to_string()
     } else {
@@ -1536,9 +1678,14 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
         .padding(Padding::new(2, 2, 1, 1))
         .title(Span::styled(
             format!(" {} Memory ", indicator),
-            Style::default().fg(ACCENT_INFO).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_INFO)
+                .add_modifier(Modifier::BOLD),
         ))
-        .title_bottom(Span::styled(" r refresh  Esc close ", Style::default().fg(TEXT_DIM)))
+        .title_bottom(Span::styled(
+            " r refresh  Esc close ",
+            Style::default().fg(TEXT_DIM),
+        ))
         .style(Style::default().bg(bg_color));
 
     let status = if app.memory_client.is_none() {
@@ -1566,7 +1713,9 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, app: &App) {
         let mut lines = vec![
             Line::from(vec![Span::styled(
                 format!("Nodes ({})", app.memory_nodes.len()),
-                Style::default().fg(ACCENT_SUCCESS).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(ACCENT_SUCCESS)
+                    .add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
         ];

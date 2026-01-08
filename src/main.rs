@@ -1,20 +1,8 @@
-mod ai;
-mod app;
-mod browser;
-mod chat;
-mod config;
-mod mascot;
-mod memory;
-mod rag;
-mod scrape;
-mod search;
-mod storage;
-mod tabs;
-mod ui;
-
 use anyhow::{Context, Result};
-use app::App;
-use browser::{Browser, RenderMode};
+use azul_browse::app::App;
+use azul_browse::browser::{Browser, RenderMode};
+use azul_browse::search::{self, QueryTarget, SearchManager};
+use azul_browse::{ai, browser, config, ui};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -24,7 +12,6 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::env;
 use std::io;
 use std::time::{Duration, Instant};
-use search::{QueryTarget, SearchManager};
 
 const VERSION: &str = "3.0.0";
 
@@ -67,10 +54,10 @@ TUI KEYBINDINGS:
     H/L         Navigate back/forward
     Enter       Open selected link (in sidebar)
     1, 2, 3     Focus Content (1), Sidebar (2), Chat (3)
-    c           Focus chat panel
+    c           Open chat panel
     Ctrl+T      Cycle theme forward
     T           Cycle theme backward
-    z           Toggle zen mode
+    z           Toggle focus mode
     ?           Toggle help
     q, Ctrl+C   Quit
 
@@ -135,7 +122,11 @@ fn main() -> Result<()> {
     // Legacy support: -q query (where query is multiple args)
     if args.len() >= 3 && args[1] == "-q" {
         let query_parts: Vec<&String> = args[2..].iter().filter(|a| *a != "--js").collect();
-        let query = query_parts.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+        let query = query_parts
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         return run_cli_mode(&query, js_mode);
     }
 
@@ -224,10 +215,13 @@ fn run_app<B: ratatui::backend::Backend>(
 /// CLI mode - fetch a URL or search query and display results
 /// Enhanced with AI summaries and Exa integration
 fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
-    use ai::Summarizer;
+    use azul_browse::ai::Summarizer;
 
     println!("╭─────────────────────────────────────────────────────────────╮");
-    println!("│  Azul Browser v{} - Headless Mode                         │", VERSION);
+    println!(
+        "│  Azul Browser v{} - Headless Mode                         │",
+        VERSION
+    );
     println!("╰─────────────────────────────────────────────────────────────╯");
     println!();
     println!("Query: {}", query);
@@ -253,7 +247,9 @@ fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
             println!();
 
             let browser = Browser::new().context("Failed to create browser")?;
-            let page = browser.fetch_with_mode(&url, render_mode).context("Failed to fetch page")?;
+            let page = browser
+                .fetch_with_mode(&url, render_mode)
+                .context("Failed to fetch page")?;
 
             // Generate AI summary if available
             if let Some(ref sum) = summarizer {
@@ -285,14 +281,17 @@ fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
 
             // Generate AI summary of search results
             if let Some(ref sum) = summarizer {
-                let ai_results: Vec<ai::SearchResult> = response.results.iter().take(10).map(|r| {
-                    ai::SearchResult {
+                let ai_results: Vec<ai::SearchResult> = response
+                    .results
+                    .iter()
+                    .take(10)
+                    .map(|r| ai::SearchResult {
                         title: r.title.clone(),
                         url: r.url.clone(),
                         description: r.description.clone(),
                         source: r.engine.clone(),
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 if !ai_results.is_empty() {
                     println!("━━━ AI Summary ━━━");
@@ -314,8 +313,8 @@ fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
         }
         QueryTarget::MultiSearch { query } => {
             // Use config-aware search manager (includes Exa if configured)
-            let manager = SearchManager::with_config(&config)
-                .context("Search manager init failed")?;
+            let manager =
+                SearchManager::with_config(&config).context("Search manager init failed")?;
 
             let exa_status = if manager.has_exa() { " + Exa" } else { "" };
             println!("━━━ Multi-Engine Search{} ━━━", exa_status);
@@ -326,14 +325,17 @@ fn run_cli_mode(query: &str, js_mode: bool) -> Result<()> {
 
             // Generate AI summary of search results
             if let Some(ref sum) = summarizer {
-                let ai_results: Vec<ai::SearchResult> = response.results.iter().take(10).map(|r| {
-                    ai::SearchResult {
+                let ai_results: Vec<ai::SearchResult> = response
+                    .results
+                    .iter()
+                    .take(10)
+                    .map(|r| ai::SearchResult {
                         title: r.title.clone(),
                         url: r.url.clone(),
                         description: r.description.clone(),
                         source: r.engine.clone(),
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 if !ai_results.is_empty() {
                     println!("━━━ AI Summary ━━━");

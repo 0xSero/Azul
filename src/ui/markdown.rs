@@ -9,26 +9,26 @@ use ratatui::{
 use regex::Regex;
 
 // OpenCode-inspired clean color palette
-const TEXT_BODY: Color = Color::Rgb(229, 231, 235);      // Clean white #e5e7eb
-const TEXT_MUTED: Color = Color::Rgb(156, 163, 175);     // Gray #9ca3af
-const TEXT_DIM: Color = Color::Rgb(75, 85, 99);          // Darker muted #4b5563
+const TEXT_BODY: Color = Color::Rgb(229, 231, 235); // Clean white #e5e7eb
+const TEXT_MUTED: Color = Color::Rgb(156, 163, 175); // Gray #9ca3af
+const TEXT_DIM: Color = Color::Rgb(75, 85, 99); // Darker muted #4b5563
 
-const HEADER_PRIMARY: Color = Color::Rgb(82, 139, 255);  // Primary blue for H1 #528bff
+const HEADER_PRIMARY: Color = Color::Rgb(82, 139, 255); // Primary blue for H1 #528bff
 const HEADER_SECONDARY: Color = Color::Rgb(167, 139, 250); // Purple for H2 #a78bfa
 const HEADER_TERTIARY: Color = Color::Rgb(129, 140, 248); // Indigo for H3 #818cf8
 
-const ACCENT_LINK: Color = Color::Rgb(96, 165, 250);     // Light blue #60a5fa
-const ACCENT_CODE: Color = Color::Rgb(52, 211, 153);     // Emerald #34d399
-const ACCENT_QUOTE: Color = Color::Rgb(148, 163, 184);   // Slate #94a3b8
-const ACCENT_LIST: Color = Color::Rgb(251, 191, 36);     // Amber bullet #fbbf24
-const ACCENT_MEDIA: Color = Color::Rgb(245, 158, 11);    // Warm amber for media labels #f59e0b
-const ACCENT_REF: Color = Color::Rgb(148, 163, 184);     // Slate for references #94a3b8
+const ACCENT_LINK: Color = Color::Rgb(96, 165, 250); // Light blue #60a5fa
+const ACCENT_CODE: Color = Color::Rgb(52, 211, 153); // Emerald #34d399
+const ACCENT_QUOTE: Color = Color::Rgb(148, 163, 184); // Slate #94a3b8
+const ACCENT_LIST: Color = Color::Rgb(251, 191, 36); // Amber bullet #fbbf24
+const ACCENT_MEDIA: Color = Color::Rgb(245, 158, 11); // Warm amber for media labels #f59e0b
+const ACCENT_REF: Color = Color::Rgb(148, 163, 184); // Slate for references #94a3b8
 
-const CODE_BG: Color = Color::Rgb(24, 24, 27);           // Darker code bg #18181b
+const CODE_BG: Color = Color::Rgb(24, 24, 27); // Darker code bg #18181b
 
 // Layout constants for consistent spacing
-const INDENT: &str = "   ";                              // 3 spaces base indent
-const MAX_EXTRA_INDENT: usize = 24;                      // Cap extra indent for readability
+const INDENT: &str = "   "; // 3 spaces base indent
+const MAX_EXTRA_INDENT: usize = 24; // Cap extra indent for readability
 
 /// Styled markdown renderer - clean, PDF-like output
 pub struct StyledMarkdown {
@@ -37,7 +37,9 @@ pub struct StyledMarkdown {
 
 impl StyledMarkdown {
     pub fn new(width: usize) -> Self {
-        Self { width: width.max(20) }
+        Self {
+            width: width.max(20),
+        }
     }
 
     /// Render content with proper typography
@@ -142,17 +144,17 @@ impl StyledMarkdown {
         }
 
         // Headers - clean, simple hierarchy
-        if trimmed.starts_with("#### ") {
-            return self.with_spacing(self.render_h4(&trimmed[5..]), prev_empty, false);
+        if let Some(stripped) = trimmed.strip_prefix("#### ") {
+            return self.with_spacing(self.render_h4(stripped), prev_empty, false);
         }
-        if trimmed.starts_with("### ") {
-            return self.with_spacing(self.render_h3(&trimmed[4..]), prev_empty, false);
+        if let Some(stripped) = trimmed.strip_prefix("### ") {
+            return self.with_spacing(self.render_h3(stripped), prev_empty, false);
         }
-        if trimmed.starts_with("## ") {
-            return self.with_spacing(self.render_h2(&trimmed[3..]), prev_empty, true);
+        if let Some(stripped) = trimmed.strip_prefix("## ") {
+            return self.with_spacing(self.render_h2(stripped), prev_empty, true);
         }
-        if trimmed.starts_with("# ") {
-            return self.with_spacing(self.render_h1(&trimmed[2..]), prev_empty, true);
+        if let Some(stripped) = trimmed.strip_prefix("# ") {
+            return self.with_spacing(self.render_h1(stripped), prev_empty, true);
         }
 
         // Horizontal rule
@@ -161,31 +163,40 @@ impl StyledMarkdown {
         }
 
         // Blockquote
-        if trimmed.starts_with("> ") {
-            return vec![self.render_quote(&trimmed[2..])];
+        if let Some(stripped) = trimmed.strip_prefix("> ") {
+            return vec![self.render_quote(stripped)];
         }
 
         // List items
         let indent = line.len() - line.trim_start().len();
         let level = indent / 2;
 
-        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-            return vec![self.render_bullet(&trimmed[2..], level)];
+        if let Some(stripped) = trimmed.strip_prefix("- ") {
+            return vec![self.render_bullet(stripped, level)];
+        }
+        if let Some(stripped) = trimmed.strip_prefix("* ") {
+            return vec![self.render_bullet(stripped, level)];
         }
 
         // Numbered list
-        if let Some(caps) = Regex::new(r"^(\d+)\.\s+(.*)$").ok().and_then(|re| re.captures(trimmed)) {
+        if let Some(caps) = Regex::new(r"^(\d+)\.\s+(.*)$")
+            .ok()
+            .and_then(|re| re.captures(trimmed))
+        {
             if let (Some(num), Some(text)) = (caps.get(1), caps.get(2)) {
                 return vec![self.render_number(num.as_str(), text.as_str(), level)];
             }
         }
 
         // Task items
-        if trimmed.starts_with("- [ ] ") {
-            return vec![self.render_task(&trimmed[6..], false, level)];
+        if let Some(stripped) = trimmed.strip_prefix("- [ ] ") {
+            return vec![self.render_task(stripped, false, level)];
         }
-        if trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
-            return vec![self.render_task(&trimmed[6..], true, level)];
+        if let Some(stripped) = trimmed.strip_prefix("- [x] ") {
+            return vec![self.render_task(stripped, true, level)];
+        }
+        if let Some(stripped) = trimmed.strip_prefix("- [X] ") {
+            return vec![self.render_task(stripped, true, level)];
         }
 
         // Regular paragraph
@@ -193,7 +204,12 @@ impl StyledMarkdown {
     }
 
     /// Add generous spacing around headers for clear visual hierarchy
-    fn with_spacing(&self, line: Line<'static>, prev_empty: bool, major: bool) -> Vec<Line<'static>> {
+    fn with_spacing(
+        &self,
+        line: Line<'static>,
+        prev_empty: bool,
+        major: bool,
+    ) -> Vec<Line<'static>> {
         let mut result = Vec::new();
         // Always add breathing room before headers
         if !prev_empty {
@@ -217,14 +233,12 @@ impl StyledMarkdown {
         let max_width = self.width.saturating_sub(4);
         let display: String = text.chars().take(max_width).collect();
 
-        Line::from(vec![
-            Span::styled(
-                display.to_uppercase(),
-                Style::default()
-                    .fg(HEADER_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
+        Line::from(vec![Span::styled(
+            display.to_uppercase(),
+            Style::default()
+                .fg(HEADER_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )])
     }
 
     fn render_h2(&self, text: &str) -> Line<'static> {
@@ -299,7 +313,9 @@ impl StyledMarkdown {
             Span::styled("│ ", Style::default().fg(ACCENT_QUOTE)),
             Span::styled(
                 display_text,
-                Style::default().fg(TEXT_MUTED).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(TEXT_MUTED)
+                    .add_modifier(Modifier::ITALIC),
             ),
         ])
     }
@@ -309,7 +325,7 @@ impl StyledMarkdown {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn render_bullet(&self, text: &str, level: usize) -> Line<'static> {
-        let indent = "  ".repeat(level);  // 2 spaces per level (tighter)
+        let indent = "  ".repeat(level); // 2 spaces per level (tighter)
         let bullet = match level {
             0 => "•",
             1 => "◦",
@@ -348,13 +364,15 @@ impl StyledMarkdown {
     fn render_task(&self, text: &str, done: bool, level: usize) -> Line<'static> {
         let indent = "    ".repeat(level);
         let (check, check_style) = if done {
-            ("[x]", Style::default().fg(ACCENT_CODE))  // Done
+            ("[x]", Style::default().fg(ACCENT_CODE)) // Done
         } else {
             ("[ ]", Style::default().fg(TEXT_DIM))
         };
 
         let text_style = if done {
-            Style::default().fg(TEXT_DIM).add_modifier(Modifier::CROSSED_OUT)
+            Style::default()
+                .fg(TEXT_DIM)
+                .add_modifier(Modifier::CROSSED_OUT)
         } else {
             Style::default().fg(TEXT_BODY)
         };
@@ -372,31 +390,38 @@ impl StyledMarkdown {
 
     fn render_code_block(&self, lines: &[String]) -> Vec<Line<'static>> {
         let mut result = Vec::new();
-        let code_border = Color::Rgb(55, 55, 62);  // BORDER_DEFAULT equivalent
+        let code_border = Color::Rgb(55, 55, 62); // BORDER_DEFAULT equivalent
 
         // Top border
         result.push(Line::from(vec![
             Span::styled("   +", Style::default().fg(code_border)),
-            Span::styled("-".repeat(self.width.saturating_sub(8).min(70)), Style::default().fg(code_border)),
+            Span::styled(
+                "-".repeat(self.width.saturating_sub(8).min(70)),
+                Style::default().fg(code_border),
+            ),
         ]));
 
         // Code lines with left border
         for line in lines {
             // Pad line to consistent width for clean bg
-            let padded = format!("{:<width$}", line, width = self.width.saturating_sub(8).min(70));
+            let padded = format!(
+                "{:<width$}",
+                line,
+                width = self.width.saturating_sub(8).min(70)
+            );
             result.push(Line::from(vec![
                 Span::styled("   | ", Style::default().fg(code_border)),
-                Span::styled(
-                    padded,
-                    Style::default().fg(ACCENT_CODE).bg(CODE_BG),
-                ),
+                Span::styled(padded, Style::default().fg(ACCENT_CODE).bg(CODE_BG)),
             ]));
         }
 
         // Bottom border
         result.push(Line::from(vec![
             Span::styled("   +", Style::default().fg(code_border)),
-            Span::styled("-".repeat(self.width.saturating_sub(8).min(70)), Style::default().fg(code_border)),
+            Span::styled(
+                "-".repeat(self.width.saturating_sub(8).min(70)),
+                Style::default().fg(code_border),
+            ),
         ]));
 
         result
@@ -408,8 +433,8 @@ impl StyledMarkdown {
 
     fn render_think_block(&self, lines: &[String]) -> Vec<Line<'static>> {
         let mut result = Vec::new();
-        let think_border = Color::Rgb(70, 70, 85);    // Subtle border
-        let think_text = Color::Rgb(120, 120, 140);   // Dim text for thinking
+        let think_border = Color::Rgb(70, 70, 85); // Subtle border
+        let think_text = Color::Rgb(120, 120, 140); // Dim text for thinking
 
         // Calculate available width for content (minus border chars)
         let content_width = self.width.saturating_sub(8).max(10);
@@ -418,16 +443,25 @@ impl StyledMarkdown {
         // Header - simple and short
         result.push(Line::from(vec![
             Span::styled("  ╭─ ", Style::default().fg(think_border)),
-            Span::styled("thinking", Style::default().fg(think_border).add_modifier(Modifier::ITALIC)),
-            Span::styled(" ".to_string() + &"─".repeat(border_width.saturating_sub(12)), Style::default().fg(think_border)),
+            Span::styled(
+                "thinking",
+                Style::default()
+                    .fg(think_border)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::styled(
+                " ".to_string() + &"─".repeat(border_width.saturating_sub(12)),
+                Style::default().fg(think_border),
+            ),
         ]));
 
         // Think content with left border - truncate each line
         for line in lines {
             if line.trim().is_empty() {
-                result.push(Line::from(vec![
-                    Span::styled("  │", Style::default().fg(think_border)),
-                ]));
+                result.push(Line::from(vec![Span::styled(
+                    "  │",
+                    Style::default().fg(think_border),
+                )]));
             } else {
                 // Truncate line to fit width
                 let truncated: String = line.chars().take(content_width).collect();
@@ -435,7 +469,9 @@ impl StyledMarkdown {
                     Span::styled("  │ ", Style::default().fg(think_border)),
                     Span::styled(
                         truncated,
-                        Style::default().fg(think_text).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(think_text)
+                            .add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }
@@ -477,8 +513,18 @@ impl StyledMarkdown {
         let url = truncate_end(url, self.width.saturating_sub(20).max(20));
         Line::from(vec![
             Span::styled(INDENT, Style::default()),
-            Span::styled("[image] ", Style::default().fg(ACCENT_MEDIA).add_modifier(Modifier::BOLD)),
-            Span::styled(alt.to_string(), Style::default().fg(ACCENT_LINK).add_modifier(Modifier::UNDERLINED)),
+            Span::styled(
+                "[image] ",
+                Style::default()
+                    .fg(ACCENT_MEDIA)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                alt.to_string(),
+                Style::default()
+                    .fg(ACCENT_LINK)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
             Span::styled("  ", Style::default()),
             Span::styled(url, Style::default().fg(TEXT_DIM)),
         ])
@@ -496,8 +542,11 @@ impl StyledMarkdown {
                 '*' if chars.peek() == Some(&'*') => {
                     chars.next();
                     self.flush(&mut spans, &mut current);
-                    let content = self.read_until(&mut chars, |c, peek| c == '*' && peek == Some(&'*'));
-                    if chars.peek() == Some(&'*') { chars.next(); }
+                    let content =
+                        self.read_until(&mut chars, |c, peek| c == '*' && peek == Some(&'*'));
+                    if chars.peek() == Some(&'*') {
+                        chars.next();
+                    }
                     spans.push(Span::styled(
                         content,
                         Style::default().fg(TEXT_BODY).add_modifier(Modifier::BOLD),
@@ -509,7 +558,9 @@ impl StyledMarkdown {
                     let content = self.read_until(&mut chars, |c, _| c == '*');
                     spans.push(Span::styled(
                         content,
-                        Style::default().fg(TEXT_BODY).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(TEXT_BODY)
+                            .add_modifier(Modifier::ITALIC),
                     ));
                 }
                 // Inline code: `code`
@@ -540,7 +591,9 @@ impl StyledMarkdown {
                         let _url = self.read_until(&mut chars, |c, _| c == ')');
                         spans.push(Span::styled(
                             link_text,
-                            Style::default().fg(ACCENT_LINK).add_modifier(Modifier::UNDERLINED),
+                            Style::default()
+                                .fg(ACCENT_LINK)
+                                .add_modifier(Modifier::UNDERLINED),
                         ));
                     } else {
                         current.push('[');
@@ -555,7 +608,10 @@ impl StyledMarkdown {
         self.flush(&mut spans, &mut current);
 
         if spans.is_empty() {
-            vec![Span::styled(text.to_string(), Style::default().fg(TEXT_BODY))]
+            vec![Span::styled(
+                text.to_string(),
+                Style::default().fg(TEXT_BODY),
+            )]
         } else {
             spans
         }
@@ -563,7 +619,10 @@ impl StyledMarkdown {
 
     fn flush(&self, spans: &mut Vec<Span<'static>>, current: &mut String) {
         if !current.is_empty() {
-            spans.push(Span::styled(current.clone(), Style::default().fg(TEXT_BODY)));
+            spans.push(Span::styled(
+                current.clone(),
+                Style::default().fg(TEXT_BODY),
+            ));
             current.clear();
         }
     }
