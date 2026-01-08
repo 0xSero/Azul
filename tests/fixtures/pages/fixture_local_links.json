@@ -1,0 +1,54 @@
+{
+  "url": "https://fixture.local/links",
+  "title": "Fixture Links",
+  "content_lines": [
+    "# Fixture Links",
+    "",
+    "This page exists to exercise long link titles in the sidebar.",
+    "",
+    "Scroll the sidebar to review link truncation and numbering."
+  ],
+  "raw_content": "<html>\n<head><title>Fixture Links</title></head>\n<body>\n<ul>\n<li>Long links</li>\n</ul>\n</body>\n</html>\n",
+  "links": [
+    {
+      "text": "A very long link title that should be truncated in the sidebar for readability",
+      "url": "https://long.example.com/alpha"
+    },
+    {
+      "text": "Another extremely verbose link title that keeps going to stress the layout",
+      "url": "https://long.example.com/bravo"
+    },
+    {
+      "text": "Documentation: Installing Azul in a constrained terminal environment",
+      "url": "https://docs.example.com/install/azul"
+    },
+    {
+      "text": "Release notes for Azul Browse version three point zero with full changelog",
+      "url": "https://releases.example.com/azul/3-0"
+    },
+    {
+      "text": "Research paper on terminal UX readability and line length preferences",
+      "url": "https://papers.example.com/tui/readability"
+    },
+    {
+      "text": "Open source repository for Azul Browse with issue tracker and roadmap",
+      "url": "https://github.com/azul/azul"
+    },
+    {
+      "text": "Community discussion thread about sidebar wrapping strategies and sizing",
+      "url": "https://forum.example.com/azul/sidebar-wrapping"
+    },
+    {
+      "text": "Benchmark report comparing TUI layout strategies across terminals",
+      "url": "https://benchmarks.example.com/tui/layouts"
+    },
+    {
+      "text": "FAQ: Why does Azul default to a two pane layout on narrow screens",
+      "url": "https://help.example.com/azul/faq"
+    },
+    {
+      "text": "Short link",
+      "url": "https://short.example.com"
+    }
+  ]
+}

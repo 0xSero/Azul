@@ -1,0 +1,34 @@
+---
+source: tests/tui_snapshots.rs
+expression: output
+---
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│  1 Fixture Article | + (t)                                                             │
+│ ╭ URL ───────────────────────────────────────────────────────────────────────────────╮ │
+│ │  https://fixture.local/article                                                     │ │
+│ ╰────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                        │
+│ ╭ 4 ─────────────────────╮ ╭ CONTENT ────────────────────────────────────────────────╮ │
+│ │  1 Fixture Links       │ │                                                         │ │
+│ │  2 Example Domain      │ │ FIXTURE ARTICLE                                         │ │
+│ │  3 Rust Language       │ │                                                         │ │
+│ │  4 Azul Repo           │ │                                                         │ │
+│ │                        │ │   This is a baseline fixture page used for TUI snapsh   │ │
+│ │                        │ │   tests.                                                │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │ ─ Highlights                                            │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │   • Deterministic layout                                │ │
+│ │                        │ │   • No network access                                   │ │
+│ │                        │ │   • Stable content for snapshots                        │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │   Notes                                                 │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │                                                         │ │
+│ │                        │ │   Use  /  to focus the URL bar and  ?  for help.        │ │
+│ ╰────────────────────────╯ ╰─────────────────────────────────────────────────────────╯ │
+│   -  1/1  Ready - / search | t new tab | b bookmarks | c chat | z focus | ? help   |   │
+│                                                                                        │
+╰────────────────────────────────────────────────────────────────────────────────────────╯

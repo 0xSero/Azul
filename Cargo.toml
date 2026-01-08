@@ -55,3 +55,12 @@ tracing-subscriber = "0.3"
 [dev-dependencies]
 mockito = "1.0"
 tempfile = "3.10"
+insta = "1.41"
+portable-pty = "0.8"
+vt100 = "0.15"
+
+[features]
+default = []
+fixture-mode = []
+network-tests = []
+test-support = []

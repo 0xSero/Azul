@@ -60,7 +60,11 @@ pub fn default_fallback_models() -> Vec<String> {
 }
 
 impl OpenRouterProvider {
-    pub fn new(api_key: String, models: Option<Vec<String>>, base_url: Option<String>) -> Result<Self> {
+    pub fn new(
+        api_key: String,
+        models: Option<Vec<String>>,
+        base_url: Option<String>,
+    ) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -241,7 +245,8 @@ Do NOT include phrases like "Based on the search results" or "The results show".
             query, context
         );
 
-        self.provider.complete_with_system(system_prompt, &user_prompt)
+        self.provider
+            .complete_with_system(system_prompt, &user_prompt)
     }
 
     /// Summarize a webpage
@@ -264,7 +269,8 @@ Your summary should:
             title, url, truncated
         );
 
-        self.provider.complete_with_system(system_prompt, &user_prompt)
+        self.provider
+            .complete_with_system(system_prompt, &user_prompt)
     }
 
     /// Extract key points from content
@@ -287,7 +293,9 @@ Example format:
             count
         );
 
-        let response = self.provider.complete_with_system(&system_prompt, &truncated)?;
+        let response = self
+            .provider
+            .complete_with_system(&system_prompt, &truncated)?;
 
         // Parse numbered list
         let points: Vec<String> = response
@@ -332,7 +340,8 @@ Keep your answer concise and direct."#;
 
         let user_prompt = format!("Content:\n{}\n\nQuestion: {}", truncated, question);
 
-        self.provider.complete_with_system(system_prompt, &user_prompt)
+        self.provider
+            .complete_with_system(system_prompt, &user_prompt)
     }
 
     /// Check if summarization is available
@@ -344,6 +353,34 @@ Keep your answer concise and direct."#;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<String>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(val) => std::env::set_var(key, val),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(val) => std::env::set_var(self.key, val),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     #[test]
     fn test_default_fallback_models() {
@@ -354,8 +391,17 @@ mod tests {
 
     #[test]
     fn test_summarizer_from_env_without_key() {
-        // Clear the env var for this test
-        std::env::remove_var("OPENROUTER_API_KEY");
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().expect("temp config dir");
+        let temp_config = temp_dir.path().join("config.json");
+
+        let _config_guard = EnvVarGuard::set(
+            "AZUL_CONFIG_PATH",
+            Some(temp_config.to_string_lossy().to_string()),
+        );
+        let _openrouter_guard = EnvVarGuard::set("OPENROUTER_API_KEY", None);
+        let _azul_ai_guard = EnvVarGuard::set("AZUL_AI_API_KEY", None);
+
         let summarizer = Summarizer::from_env();
         assert!(summarizer.is_none());
     }

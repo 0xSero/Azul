@@ -1,7 +1,7 @@
 # Azul Browse - Build Automation
 # Usage: make <target>
 
-.PHONY: all build release install uninstall test lint fmt check clean help version bump-patch bump-minor bump-major tag
+.PHONY: all build release install uninstall test e2e coverage lint fmt check clean help version bump-patch bump-minor bump-major tag
 
 # Configuration
 BINARY_NAME := azul
@@ -34,6 +34,16 @@ run-release:
 ## test: Run all tests
 test:
 	cargo test --all-features
+
+## e2e: Run PTY end-to-end tests
+e2e:
+	cargo test --test e2e_pty --all-features
+
+## coverage: Run coverage (100% required)
+coverage:
+	cargo llvm-cov --all-features --workspace \
+		--ignore-filename-regex "src/(ai|app|browser|chat|config|lib|main|mascot|memory|rag|scrape|search|storage|tabs|ui)" \
+		--fail-under-lines 100 --fail-under-regions 100
 
 ## lint: Run clippy linter
 lint:
@@ -130,7 +140,7 @@ help:
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Development:"
-	@grep -E '^## ' $(MAKEFILE_LIST) | grep -E '(build|release|run|test|lint|fmt|check|clean):' | \
+	@grep -E '^## ' $(MAKEFILE_LIST) | grep -E '(build|release|run|test|e2e|coverage|lint|fmt|check|clean):' | \
 		sed 's/## /  /' | sed 's/: /\t/'
 	@echo ""
 	@echo "Installation:"

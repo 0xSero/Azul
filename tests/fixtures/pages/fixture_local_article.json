@@ -1,0 +1,32 @@
+{
+  "url": "https://fixture.local/article",
+  "title": "Fixture Article",
+  "content_lines": [
+    "# Fixture Article",
+    "",
+    "This is a baseline fixture page used for TUI snapshot tests.",
+    "",
+    "## Highlights",
+    "",
+    "- Deterministic layout",
+    "- No network access",
+    "- Stable content for snapshots",
+    "",
+    "### Notes",
+    "",
+    "Use `/` to focus the URL bar and `?` for help.",
+    "",
+    "```",
+    "cargo run",
+    "```",
+    "",
+    "End of fixture."
+  ],
+  "raw_content": "<!doctype html>\n<html>\n<head><title>Fixture Article</title></head>\n<body>\n<h1>Fixture Article</h1>\n<p>Baseline content for snapshots.</p>\n</body>\n</html>\n",
+  "links": [
+    {"text": "Fixture Links", "url": "https://fixture.local/links"},
+    {"text": "Example Domain", "url": "https://example.com"},
+    {"text": "Rust Language", "url": "https://www.rust-lang.org"},
+    {"text": "Azul Repo", "url": "https://github.com/azul/azul"}
+  ]
+}

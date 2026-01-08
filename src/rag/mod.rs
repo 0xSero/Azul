@@ -32,13 +32,13 @@ pub struct RagSource {
     #[serde(default)]
     pub content: String,
     #[serde(default)]
-    pub text: Option<String>,  // Alternative field name
+    pub text: Option<String>, // Alternative field name
     #[serde(default)]
     pub score: f32,
     #[serde(default)]
-    pub similarity: Option<f32>,  // Alternative field name
+    pub similarity: Option<f32>, // Alternative field name
     #[serde(flatten)]
-    pub extra: serde_json::Value,  // Capture any extra fields
+    pub extra: serde_json::Value, // Capture any extra fields
 }
 
 /// RAG client for querying home-rag
@@ -52,7 +52,7 @@ impl RagClient {
     /// Create a new RAG client
     pub fn new(base_url: String) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(120))  // RAG queries can take a while
+            .timeout(Duration::from_secs(120)) // RAG queries can take a while
             .build()
             .context("Failed to create HTTP client")?;
 
@@ -92,7 +92,10 @@ impl RagClient {
     /// Query the RAG system
     pub fn query(&self, query: &str, top_k: Option<usize>) -> Result<RagResponse> {
         if !self.enabled {
-            anyhow::bail!("RAG service is not available. Check home-rag at {}", self.base_url);
+            anyhow::bail!(
+                "RAG service is not available. Check home-rag at {}",
+                self.base_url
+            );
         }
 
         let request = RagQueryRequest {
@@ -112,7 +115,9 @@ impl RagClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             anyhow::bail!("RAG query failed ({}): {}", status, text);
         }
 
@@ -123,8 +128,15 @@ impl RagClient {
             Ok(result) => Ok(result),
             Err(e) => {
                 // Try to extract useful info from the response
-                anyhow::bail!("Failed to parse RAG response: {}. Response: {}", e,
-                    if text.len() > 300 { &text[..300] } else { &text })
+                anyhow::bail!(
+                    "Failed to parse RAG response: {}. Response: {}",
+                    e,
+                    if text.len() > 300 {
+                        &text[..300]
+                    } else {
+                        &text
+                    }
+                )
             }
         }
     }
@@ -133,7 +145,8 @@ impl RagClient {
     pub fn get_context(&self, query: &str, max_chunks: usize) -> Result<Vec<String>> {
         let response = self.query(query, Some(max_chunks))?;
         // Extract content from sources
-        let context: Vec<String> = response.sources
+        let context: Vec<String> = response
+            .sources
             .iter()
             .map(|s| s.text.as_ref().unwrap_or(&s.content).clone())
             .collect();
@@ -158,6 +171,8 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "network-tests")]
+    #[ignore = "network-bound; run with --features network-tests -- --ignored"]
     fn test_rag_client_creation() {
         // Should not panic even if service is unavailable
         let client = RagClient::new("http://localhost:8000".to_string());

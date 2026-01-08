@@ -1,17 +1,23 @@
+#![cfg(feature = "network-tests")]
+
 use std::process::Command;
 use std::time::Duration;
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_cli_search() {
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "-q", "rust programming"])
+        .args(["run", "--release", "--", "-q", "rust programming"])
         .output()
         .expect("Failed to execute command");
 
     assert!(output.status.success(), "Command should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.is_empty(), "Should have output");
-    assert!(stdout.contains("Azul CLI Mode"), "Should show CLI mode header");
+    assert!(
+        stdout.contains("Azul CLI Mode"),
+        "Should show CLI mode header"
+    );
     assert!(
         stdout.contains("Searching DuckDuckGo for"),
         "Should perform a DuckDuckGo search"
@@ -19,21 +25,26 @@ fn test_cli_search() {
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_cli_url_fetch() {
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "-q", "https://example.com"])
+        .args(["run", "--release", "--", "-q", "https://example.com"])
         .output()
         .expect("Failed to execute command");
 
     assert!(output.status.success(), "Command should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Example Domain"), "Should fetch example.com");
+    assert!(
+        stdout.contains("Example Domain"),
+        "Should fetch example.com"
+    );
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_cli_wikipedia_search() {
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "-q", "w:Rust"])
+        .args(["run", "--release", "--", "-q", "w:Rust"])
         .output()
         .expect("Failed to execute command");
 
@@ -46,9 +57,10 @@ fn test_cli_wikipedia_search() {
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_cli_arxiv_search() {
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "-q", "a:neural networks"])
+        .args(["run", "--release", "--", "-q", "a:neural networks"])
         .output()
         .expect("Failed to execute command");
 
@@ -61,9 +73,10 @@ fn test_cli_arxiv_search() {
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_http_client() {
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "--test-http"])
+        .args(["run", "--release", "--", "--test-http"])
         .output()
         .expect("Failed to execute command");
 
@@ -76,18 +89,18 @@ fn test_http_client() {
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_browser_client() {
     // Test that we can create a browser client
     use reqwest::blocking::Client;
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build();
+    let client = Client::builder().timeout(Duration::from_secs(10)).build();
 
     assert!(client.is_ok(), "Should create HTTP client");
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_simple_fetch() {
     use reqwest::blocking::Client;
 
@@ -101,6 +114,7 @@ fn test_simple_fetch() {
 }
 
 #[test]
+#[ignore = "network-bound; run with --features network-tests -- --ignored"]
 fn test_search_prefix_parsing() {
     // Test that search prefixes are correctly parsed
     // This tests the search routing logic
@@ -115,7 +129,7 @@ fn test_search_prefix_parsing() {
 
     for (input, expected_domain) in test_cases {
         let output = Command::new("cargo")
-            .args(&["run", "--release", "--", "-q", input])
+            .args(["run", "--release", "--", "-q", input])
             .output()
             .expect("Failed to execute command");
 

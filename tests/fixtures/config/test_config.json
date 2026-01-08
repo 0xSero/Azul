@@ -1,0 +1,16 @@
+{
+  "theme": {
+    "accent": "#9f8a60",
+    "border": "#33312f",
+    "text": "#f0ece0",
+    "background": "#1b1b1b"
+  },
+  "ai": {},
+  "ui": {
+    "panes": {
+      "sidebar_width": 26,
+      "focus_mode": false
+    }
+  },
+  "refresh_rate_ms": 200
+}

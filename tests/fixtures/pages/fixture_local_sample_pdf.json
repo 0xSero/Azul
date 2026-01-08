@@ -1,0 +1,25 @@
+{
+  "url": "https://fixture.local/sample.pdf",
+  "title": "PDF Document",
+  "content_lines": [
+    "-------------------------------------------",
+    "              PDF Document",
+    "-------------------------------------------",
+    "URL: https://fixture.local/sample.pdf",
+    "Press 'o' to open in system PDF viewer",
+    "-------------------------------------------",
+    "",
+    "1 Introduction",
+    "This is a fixture PDF rendered into text for snapshot tests.",
+    "",
+    "2 Data",
+    "Table 1: Example values",
+    "alpha 10",
+    "bravo 20",
+    "",
+    "3 Conclusion",
+    "End of PDF fixture."
+  ],
+  "raw_content": "",
+  "links": []
+}
