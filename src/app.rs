@@ -66,6 +66,7 @@ pub enum ToolAction {
     Navigate(String),
     FollowLink(usize),
     Scroll { direction: String, amount: usize },
+    SaveReport { filename: String, content: String },
 }
 
 /// Panel mode for overlays
@@ -91,6 +92,7 @@ pub struct App {
     pub format_text: bool,
     pub ai_summary: Option<String>,
     pub panel_mode: PanelMode,
+    pub fullscreen: bool,
 
     // Tabs
     pub tabs: TabManager,
@@ -184,6 +186,7 @@ impl App {
             format_text: true,
             ai_summary: None,
             panel_mode: PanelMode::None,  // Chat is always visible, not a panel mode
+            fullscreen: false,
             tabs: TabManager::new(),
             url_input: String::new(),
             mascot: Mascot::new(),
@@ -352,6 +355,9 @@ impl App {
                                 }
                                 self.status_message = format!("AI scrolled {}", direction);
                             }
+                        }
+                        ToolAction::SaveReport { filename, .. } => {
+                            self.status_message = format!("AI saved report to {}", filename);
                         }
                     }
                 }
@@ -545,6 +551,15 @@ impl App {
             (KeyCode::Char('3'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
                 self.chat_focused = true;
                 self.status_message = "Chat - type message, Esc to exit".to_string();
+                return Ok(());
+            }
+            (KeyCode::Char('z'), KeyModifiers::NONE) if self.focus != Focus::URLBar => {
+                self.fullscreen = !self.fullscreen;
+                self.status_message = if self.fullscreen {
+                    "Zen Mode - Press 'z' to exit".to_string()
+                } else {
+                    "Normal Mode".to_string()
+                };
                 return Ok(());
             }
             _ => {}
@@ -1472,6 +1487,44 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
                 }),
             },
         },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "read_file".to_string(),
+                description: "Read content from a local file".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        }
+                    },
+                    "required": ["path"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "save_report".to_string(),
+                description: "Save text content to a file (Markdown/Text) in the current directory".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "filename": {
+                            "type": "string",
+                            "description": "Filename (e.g. 'research.md')"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to save"
+                        }
+                    },
+                    "required": ["filename", "content"]
+                }),
+            },
+        },
     ]
 }
 
@@ -1679,6 +1732,37 @@ fn execute_tool_call(
                 "No page currently loaded.".to_string()
             } else {
                 format!("Page content:\n{}", context.content)
+            }
+        }
+        "read_file" => {
+            if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        // Truncate if too long (to avoid blowing up context window)
+                        if content.len() > 10000 {
+                            format!("File content (truncated):\n{}...\n(Total {} bytes)", &content[..10000], content.len())
+                        } else {
+                            format!("File content:\n{}", content)
+                        }
+                    },
+                    Err(e) => format!("Error reading file: {}", e),
+                }
+            } else {
+                "Error: Missing 'path' parameter".to_string()
+            }
+        }
+        "save_report" => {
+            let filename = args.get("filename").and_then(|v| v.as_str()).unwrap_or("report.md");
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            
+            let _ = tx.send(AppMessage::ToolAction(ToolAction::SaveReport {
+                filename: filename.to_string(),
+                content: content.to_string(),
+            }));
+
+            match std::fs::write(filename, content) {
+                Ok(_) => format!("Successfully saved report to {}", filename),
+                Err(e) => format!("Error saving report: {}", e),
             }
         }
         "list_links" => {
