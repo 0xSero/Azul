@@ -1098,6 +1098,12 @@ impl App {
             KeyCode::Down => {
                 self.chat_scroll = self.chat_scroll.saturating_sub(1);
             }
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(session) = &mut self.chat_session {
+                    session.clear();
+                    self.status_message = "Chat cleared".to_string();
+                }
+            }
             KeyCode::Char(c) => {
                 self.chat_input.push(c);
             }
