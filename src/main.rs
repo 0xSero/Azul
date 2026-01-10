@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use app::App;
 use browser::{Browser, RenderMode};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -188,13 +188,15 @@ fn run_app<B: ratatui::backend::Backend>(
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                // Handle quit specially
-                if matches!(key.code, KeyCode::Char('c'))
-                    && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                {
-                    app.quit();
-                } else {
-                    app.handle_key(key)?;
+                if key.kind == KeyEventKind::Press {
+                    // Handle quit specially
+                    if matches!(key.code, KeyCode::Char('c'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        app.quit();
+                    } else {
+                        app.handle_key(key)?;
+                    }
                 }
             }
         }
