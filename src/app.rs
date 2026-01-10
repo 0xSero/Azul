@@ -150,7 +150,14 @@ impl App {
         // Initialize chat session with available models
         let chat_session = if let Some(api_key) = config.get_api_key() {
             if !api_key.is_empty() {
-                let model = config.get_ai_model().unwrap_or("qwen/qwen3-235b-a22b:free").to_string();
+                let provider = config.ai.as_ref().and_then(|ai| ai.provider.as_deref()).unwrap_or("openrouter");
+                let default_model = if provider == "minimax" {
+                    "MiniMax-M2.1"
+                } else {
+                    "qwen/qwen3-235b-a22b:free"
+                };
+
+                let model = config.get_ai_model().unwrap_or(default_model).to_string();
                 let mut models = vec![model.clone()];
                 if let Some(fallback) = config.get_fallback_models() {
                     models.extend(fallback);
@@ -633,24 +640,30 @@ impl App {
                 if let Some(tab) = self.tabs.active_tab() {
                     if !tab.url.is_empty() {
                         let url = tab.url.clone();
-                        match std::process::Command::new("xdg-open")
-                            .arg(&url)
-                            .spawn()
-                        {
-                            Ok(_) => {
-                                self.status_message = format!("Opened in system viewer: {}", url);
-                            }
-                            Err(_) => {
-                                // Try macOS open command as fallback
-                                match std::process::Command::new("open").arg(&url).spawn() {
-                                    Ok(_) => {
-                                        self.status_message = format!("Opened in system viewer: {}", url);
-                                    }
-                                    Err(e) => {
-                                        self.status_message = format!("Failed to open: {}", e);
-                                    }
-                                }
-                            }
+                        
+                        // Cross-platform open logic
+                        let success = if cfg!(target_os = "windows") {
+                            // Windows: Try cmd /c start first
+                            std::process::Command::new("cmd")
+                                .args(&["/c", "start", "", &url])
+                                .spawn()
+                                .is_ok() || 
+                            // Fallback to PowerShell
+                            std::process::Command::new("powershell")
+                                .args(&["-Command", &format!("Start-Process '{}'", url)])
+                                .spawn()
+                                .is_ok()
+                        } else if cfg!(target_os = "macos") {
+                            std::process::Command::new("open").arg(&url).spawn().is_ok()
+                        } else {
+                            // Linux/Other
+                            std::process::Command::new("xdg-open").arg(&url).spawn().is_ok()
+                        };
+
+                        if success {
+                            self.status_message = format!("Opened in system viewer: {}", url);
+                        } else {
+                            self.status_message = "Failed to open in system viewer".to_string();
                         }
                     }
                 }
@@ -1084,9 +1097,18 @@ impl App {
                         session.add_user_message(format!("{}\n\n{}", context, message));
 
                         let api_key = self.config.get_api_key().unwrap_or("").to_string();
+                        
+                        let provider = self.config.ai.as_ref().and_then(|ai| ai.provider.as_deref()).unwrap_or("openrouter");
+                        let default_url = if provider == "minimax" {
+                            "https://api.minimax.io/v1"
+                        } else {
+                            "https://openrouter.ai/api/v1"
+                        };
+
                         let base_url = self.config.get_ai_base_url()
-                            .unwrap_or("https://openrouter.ai/api/v1")
+                            .unwrap_or(default_url)
                             .to_string();
+                            
                         let models = session.available_models.clone();
                         let messages = session.messages.clone();
                         let tx = self.page_tx.clone();
