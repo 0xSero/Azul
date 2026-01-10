@@ -1116,6 +1116,15 @@ impl App {
                     self.chat_input.clear();
                     self.chat_scroll = 0;
 
+                    // Handle slash commands
+                    if message.trim() == "/clear" {
+                        if let Some(session) = &mut self.chat_session {
+                            session.clear();
+                            self.status_message = "Chat history cleared".to_string();
+                        }
+                        return Ok(());
+                    }
+
                     let context = self.get_browser_context();
 
                     if let Some(session) = &mut self.chat_session {
