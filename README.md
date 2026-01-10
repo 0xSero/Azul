@@ -8,6 +8,8 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 ## Features
 
+- **Native Windows Support:** Fixed input lag, double-typing issues, and system "open" command compatibility.
+- **MiniMax-M2.1 Integration:** Built-in support for MiniMax AI with reasoning capabilities.
 - Full TUI web browsing with keyboard navigation
 - AI chat panel with tool-calling support (navigate, scroll, follow links)
 - Multi-engine search (DuckDuckGo, Wikipedia, arXiv, PubMed, Google Scholar, OpenLibrary)
