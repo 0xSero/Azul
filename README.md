@@ -10,6 +10,9 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 - **Native Windows Support:** Fixed input lag, double-typing issues, and system "open" command compatibility.
 - **MiniMax-M2.1 Integration:** Built-in support for MiniMax AI with reasoning capabilities.
+- **Persistent Chat:** AI conversations are automatically saved and loaded between sessions.
+- **Zen Mode:** Press `z` to toggle fullscreen focus mode for reading papers and articles.
+- **Local File Access:** AI tools to read and analyze local files on your machine.
 - Full TUI web browsing with keyboard navigation
 - AI chat panel with tool-calling support (navigate, scroll, follow links)
 - Multi-engine search (DuckDuckGo, Wikipedia, arXiv, PubMed, Google Scholar, OpenLibrary)
@@ -130,7 +133,9 @@ The browser supports OpenAI-compatible APIs:
 | `Tab` | Cycle focus (Content -> Chat -> URL) |
 | `Shift+Tab` | Reverse cycle |
 | `/` | Focus URL bar |
+| `z` | Toggle Zen Mode (Fullscreen content) |
 | `Escape` | Cancel/unfocus |
+| `Ctrl+[` | Alternative Escape (useful for broken keys) |
 
 ### Content Navigation
 | Key | Action |
@@ -141,6 +146,7 @@ The browser supports OpenAI-compatible APIs:
 | `G` | Go to bottom |
 | `Tab` (in content) | Next link |
 | `Enter` | Follow selected link |
+| `o` | Open current URL in default system browser |
 | `1-9` | Follow link by number |
 
 ### Chat Panel
@@ -149,6 +155,7 @@ The browser supports OpenAI-compatible APIs:
 | `Up` / `PageUp` | Scroll up (older messages) |
 | `Down` / `PageDown` | Scroll down (newer messages) |
 | `Enter` | Send message |
+| `Ctrl+[` | Exit chat focus |
 | Type | Input text |
 
 ### URL Bar
