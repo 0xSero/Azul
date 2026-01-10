@@ -31,21 +31,28 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 ### From Releases (Recommended)
 
-Download the latest binary for your platform from [Releases](https://github.com/0xSero/Azul/releases):
+Download the latest binary for your platform from [Releases](https://github.com/nice-bills/Azul/releases):
+
+```powershell
+# Windows (x86_64) - PowerShell
+Invoke-WebRequest -Uri "https://github.com/nice-bills/Azul/releases/latest/download/azul-windows-x86_64.zip" -OutFile "azul.zip"
+Expand-Archive -Path azul.zip -DestinationPath .
+# Move azul.exe to a folder in your PATH (e.g. C:\Windows\system32 or a custom bin folder)
+```
 
 ```bash
 # Linux (x86_64)
-curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-linux-x86_64.tar.gz
+curl -LO https://github.com/nice-bills/Azul/releases/latest/download/azul-linux-x86_64.tar.gz
 tar xzf azul-linux-x86_64.tar.gz
 sudo mv azul /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-darwin-aarch64.tar.gz
+curl -LO https://github.com/nice-bills/Azul/releases/latest/download/azul-darwin-aarch64.tar.gz
 tar xzf azul-darwin-aarch64.tar.gz
 sudo mv azul /usr/local/bin/
 
 # macOS (Intel)
-curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-darwin-x86_64.tar.gz
+curl -LO https://github.com/nice-bills/Azul/releases/latest/download/azul-darwin-x86_64.tar.gz
 tar xzf azul-darwin-x86_64.tar.gz
 sudo mv azul /usr/local/bin/
 ```
@@ -54,19 +61,15 @@ sudo mv azul /usr/local/bin/
 
 ```bash
 # Clone the repo
-git clone https://github.com/0xSero/Azul.git
+git clone https://github.com/nice-bills/Azul.git
 cd Azul
 
-# Quick install (uses Makefile)
-make install          # System-wide (/usr/local/bin, requires sudo)
-make install-user     # User-only (~/.local/bin)
-
-# Or manually
+# Quick install (Windows)
 cargo build --release
-./target/release/azul
+copy target\release\azul.exe %USERPROFILE%\.cargo\bin\azul.exe
 
-# Or via cargo
-cargo install --path .
+# Quick install (Unix)
+make install-user     # (~/.local/bin)
 ```
 
 ## Quick Start
