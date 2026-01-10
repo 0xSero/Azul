@@ -104,10 +104,10 @@ Config file location: `~/.config/azul/config.json`
     "background": "#1a1b26"
   },
   "ai": {
-    "provider": "openrouter",
+    "provider": "minimax",
     "api_key": "YOUR_API_KEY",
-    "model": "anthropic/claude-3.5-sonnet",
-    "base_url": "https://openrouter.ai/api/v1"
+    "model": "MiniMax-M2.1",
+    "base_url": "https://api.minimax.io/v1"
   },
   "refresh_rate_ms": 200,
   "rag_base_url": "http://127.0.0.1:3002",
@@ -121,6 +121,7 @@ The browser supports OpenAI-compatible APIs:
 
 | Provider | base_url |
 |----------|----------|
+| MiniMax | `https://api.minimax.io/v1` |
 | OpenRouter | `https://openrouter.ai/api/v1` |
 | OpenAI | `https://api.openai.com/v1` |
 | Local (Ollama) | `http://localhost:11434/v1` |
@@ -158,6 +159,7 @@ The browser supports OpenAI-compatible APIs:
 | `Up` / `PageUp` | Scroll up (older messages) |
 | `Down` / `PageDown` | Scroll down (newer messages) |
 | `Enter` | Send message |
+| `/clear` | Type this in chat to wipe history |
 | `Ctrl+[` | Exit chat focus |
 | Type | Input text |
 
@@ -187,12 +189,15 @@ The chat panel supports tool calls - the AI can:
 - **Navigate** to URLs
 - **Follow links** by number
 - **Scroll** the page
+- **Read local files** (e.g. "read C:\docs\notes.md")
+- **Save reports** (e.g. "save a summary to report.md")
 
 Example prompts:
 - "Go to wikipedia.org"
 - "Click on the first link"
 - "Scroll down to see more"
 - "Summarize this page"
+- "Research X and save a report to research.md"
 
 ## Development
 
