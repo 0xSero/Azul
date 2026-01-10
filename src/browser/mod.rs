@@ -470,7 +470,28 @@ fn extract_pdf_text(pdf_bytes: &[u8]) -> Result<String> {
     drop(file);
 
     // Run pdftotext to extract text (- means stdout)
-    let output = Command::new("pdftotext")
+    let mut cmd = Command::new("pdftotext");
+    
+    // Windows-specific: check common installation paths if pdftotext is not in PATH
+    if cfg!(target_os = "windows") {
+        let paths = [
+            "pdftotext", // Try PATH first
+            r"poppler_bin\poppler-24.02.0\Library\bin\pdftotext.exe", // Local dev path
+            r"C:\ProgramData\chocolatey\lib\poppler\tools\bin\pdftotext.exe",
+            r"C:\ProgramData\chocolatey\bin\pdftotext.exe",
+        ];
+        
+        for path in paths {
+            if path == "pdftotext" || std::path::Path::new(path).exists() {
+                cmd = Command::new(path);
+                // If it's the first entry, we don't know if it exists yet, 
+                // but Command::new will handle it. If it's a specific path, we checked.
+                if path != "pdftotext" { break; }
+            }
+        }
+    }
+
+    let output = cmd
         .arg("-layout")  // Maintain layout
         .arg(&pdf_path)
         .arg("-")        // Output to stdout
