@@ -129,8 +129,8 @@ impl Config {
 
         // Environment variables override file config (compatible with Go version)
 
-        // Try OPENROUTER_API_KEY first, then AZUL_AI_API_KEY
-        if let Some(key) = lookup_env_non_empty(&["OPENROUTER_API_KEY", "AZUL_AI_API_KEY"]) {
+        // Try OPENROUTER_API_KEY first, then AZUL_AI_API_KEY, then MINIMAX_API_KEY
+        if let Some(key) = lookup_env_non_empty(&["OPENROUTER_API_KEY", "AZUL_AI_API_KEY", "MINIMAX_API_KEY"]) {
             if ai.api_key.as_ref() != Some(&key) {
                 ai.api_key = Some(key);
                 changed = true;
@@ -145,8 +145,8 @@ impl Config {
             }
         }
 
-        // Model (OPENROUTER_MODEL or AZUL_AI_MODEL)
-        if let Some(model) = lookup_env_non_empty(&["OPENROUTER_MODEL", "AZUL_AI_MODEL"]) {
+        // Model lookup
+        if let Some(model) = lookup_env_non_empty(&["OPENROUTER_MODEL", "AZUL_AI_MODEL", "MINIMAX_MODEL"]) {
             if ai.model.as_ref() != Some(&model) {
                 ai.model = Some(model);
                 changed = true;
