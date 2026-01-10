@@ -1754,8 +1754,8 @@ fn execute_tool_call(
                 match std::fs::read_to_string(path) {
                     Ok(content) => {
                         // Truncate if too long (to avoid blowing up context window)
-                        if content.len() > 10000 {
-                            format!("File content (truncated):\n{}...\n(Total {} bytes)", &content[..10000], content.len())
+                        if content.len() > 100000 {
+                            format!("File content (truncated):\n{}...\n(Total {} bytes)", &content[..100000], content.len())
                         } else {
                             format!("File content:\n{}", content)
                         }

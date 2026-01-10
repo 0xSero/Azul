@@ -266,8 +266,8 @@ Do NOT include phrases like "Based on the search results" or "The results show".
 
     /// Summarize a webpage
     pub fn summarize_page(&self, title: &str, url: &str, content: &str) -> Result<String> {
-        let truncated = if content.len() > 4000 {
-            format!("{}...", &content[..4000])
+        let truncated = if content.len() > 100000 {
+            format!("{}...", &content[..100000])
         } else {
             content.to_string()
         };
@@ -290,8 +290,8 @@ Your summary should:
     /// Extract key points from content
     pub fn extract_key_points(&self, content: &str, count: usize) -> Result<Vec<String>> {
         let count = if count == 0 { 5 } else { count };
-        let truncated = if content.len() > 4000 {
-            format!("{}...", &content[..4000])
+        let truncated = if content.len() > 100000 {
+            format!("{}...", &content[..100000])
         } else {
             content.to_string()
         };
@@ -339,8 +339,8 @@ Example format:
 
     /// Answer a question about content
     pub fn answer_question(&self, content: &str, question: &str) -> Result<String> {
-        let truncated = if content.len() > 4000 {
-            format!("{}...", &content[..4000])
+        let truncated = if content.len() > 100000 {
+            format!("{}...", &content[..100000])
         } else {
             content.to_string()
         };
