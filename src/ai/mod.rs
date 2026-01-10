@@ -10,8 +10,9 @@ pub trait Provider: Send + Sync {
     fn is_available(&self) -> bool;
 }
 
-/// OpenRouter provider with fallback model support
-pub struct OpenRouterProvider {
+/// OpenAI-compatible provider (works with OpenRouter, MiniMax, etc.)
+pub struct OpenAICompatibleProvider {
+    name: String,
     api_key: String,
     models: Vec<String>,
     base_url: String,
@@ -59,17 +60,19 @@ pub fn default_fallback_models() -> Vec<String> {
     ]
 }
 
-impl OpenRouterProvider {
-    pub fn new(api_key: String, models: Option<Vec<String>>, base_url: Option<String>) -> Result<Self> {
+impl OpenAICompatibleProvider {
+    pub fn new(name: String, api_key: String, models: Option<Vec<String>>, base_url: Option<String>) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
             .context("Failed to create HTTP client")?;
 
         let models = models.unwrap_or_else(default_fallback_models);
+        // Default to OpenRouter if no base_url provided
         let base_url = base_url.unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
 
         Ok(Self {
+            name,
             api_key,
             models,
             base_url,
@@ -101,13 +104,20 @@ impl OpenRouterProvider {
         };
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let response = self
+        let mut builder = self
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("HTTP-Referer", "https://github.com/ser/azul-browse")
-            .header("X-Title", "Azul Terminal Browser")
+            .header("Authorization", format!("Bearer {}", self.api_key));
+
+        // Add OpenRouter-specific headers only if using OpenRouter
+        if self.base_url.contains("openrouter.ai") {
+            builder = builder
+                .header("HTTP-Referer", "https://github.com/0xSero/Azul")
+                .header("X-Title", "Azul Terminal Browser");
+        }
+
+        let response = builder
             .json(&request)
             .send()
             .context("Failed to send request")?;
@@ -125,7 +135,7 @@ impl OpenRouterProvider {
     }
 }
 
-impl Provider for OpenRouterProvider {
+impl Provider for OpenAICompatibleProvider {
     fn complete(&self, prompt: &str) -> Result<String> {
         self.complete_with_system("", prompt)
     }
@@ -146,7 +156,7 @@ impl Provider for OpenRouterProvider {
     }
 
     fn name(&self) -> &str {
-        "OpenRouter"
+        &self.name
     }
 
     fn is_available(&self) -> bool {
@@ -183,7 +193,8 @@ impl Summarizer {
         // Get model and fallback models from config
         let model = config.get_ai_model().map(String::from);
         let fallback_models = config.get_fallback_models();
-        let base_url = config.get_ai_base_url().map(String::from);
+        let mut base_url = config.get_ai_base_url().map(String::from);
+        let provider_name = config.ai.as_ref()?.provider.clone().unwrap_or_else(|| "openrouter".to_string());
 
         // Build models list: primary model + fallback models
         let mut models = Vec::new();
@@ -194,12 +205,21 @@ impl Summarizer {
             models.extend(fallback);
         }
 
-        // If no models specified, use the default primary model
+        // Configure defaults based on provider
         if models.is_empty() {
-            models.push("qwen/qwen3-235b-a22b:free".to_string());
+            match provider_name.as_str() {
+                "minimax" => models.push("MiniMax-M2.1".to_string()),
+                _ => models.push("qwen/qwen3-235b-a22b:free".to_string()),
+            }
         }
 
-        let provider = OpenRouterProvider::new(api_key, Some(models), base_url).ok()?;
+        if base_url.is_none() {
+             if provider_name == "minimax" {
+                 base_url = Some("https://api.minimax.io/v1".to_string());
+             }
+        }
+
+        let provider = OpenAICompatibleProvider::new(provider_name, api_key, Some(models), base_url).ok()?;
         Some(Self::new(Box::new(provider)))
     }
 
