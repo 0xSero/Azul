@@ -1067,6 +1067,10 @@ impl App {
 
     fn handle_chat_keys(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
+            KeyCode::Char('[') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chat_focused = false;
+                self.status_message = "Content mode".to_string();
+            }
             KeyCode::PageUp => {
                 self.chat_scroll += 5;
             }
@@ -1471,13 +1475,32 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
     ]
 }
 
-/// Execute Brave Search API call
+/// Execute Web Search (Brave or Fallback)
 fn brave_search(query: &str, count: usize) -> Result<String> {
     let api_key = std::env::var("BRAVE_API_KEY")
         .unwrap_or_default();
 
+    // Fallback to internal search if no Brave key
     if api_key.is_empty() {
-        return Ok("Error: BRAVE_API_KEY not set".to_string());
+        // Use internal SearchManager (DuckDuckGo)
+        let manager = SearchManager::new()?;
+        // Use general search (DuckDuckGo)
+        let engine = crate::search::EngineType::DuckDuckGo;
+        let response = manager.search_with(engine, query)?;
+        
+        if response.results.is_empty() {
+            return Ok("No results found via DuckDuckGo.".to_string());
+        }
+
+        let mut formatted = Vec::new();
+        for (i, result) in response.results.iter().take(count).enumerate() {
+            formatted.push(format!(
+                "{}. **{}**\n   {}\n   {}\n",
+                i + 1, result.title, result.url, result.description
+            ));
+        }
+        
+        return Ok(format!("## Search Results (DDG) for: {}\n\n{}", query, formatted.join("\n")));
     }
 
     let client = reqwest::blocking::Client::builder()
