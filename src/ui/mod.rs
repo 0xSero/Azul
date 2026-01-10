@@ -64,18 +64,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_tab_bar(frame, chunks[0], app);
     render_url_bar(frame, chunks[1], app);
 
-    // Always show 3-panel layout: Links (15%) | Content (50%) | Chat (35%)
-    let split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(15),  // Links (left)
-            Constraint::Percentage(50),  // Content (middle)
-            Constraint::Percentage(35),  // Chat (right)
-        ])
-        .split(chunks[2]);
-    render_compact_sidebar(frame, split[0], app);
-    render_content_only(frame, split[1], app);
-    render_chat_side_panel(frame, split[2], app);
+    if app.fullscreen {
+        // Fullscreen Mode: Only Content
+        render_content_only(frame, chunks[2], app);
+    } else {
+        // Always show 3-panel layout: Links (15%) | Content (50%) | Chat (35%)
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(15),  // Links (left)
+                Constraint::Percentage(50),  // Content (middle)
+                Constraint::Percentage(35),  // Chat (right)
+            ])
+            .split(chunks[2]);
+        render_compact_sidebar(frame, split[0], app);
+        render_content_only(frame, split[1], app);
+        render_chat_side_panel(frame, split[2], app);
+    }
 
     render_status_bar(frame, chunks[3], app);
 
@@ -846,8 +851,15 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
                             Span::styled(" AI ", Style::default().bg(TOKYO_GREEN).fg(TOKYO_BG).add_modifier(Modifier::BOLD)),
                             Span::raw(" "),
                         ]));
-                        let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
-                        let styled = md_renderer.render(&content_lines);
+                        
+                        // Filter out tool call XML and internal reasoning tags
+                        let clean_lines: Vec<String> = msg.content
+                            .lines()
+                            .filter(|line| !line.trim().starts_with("<minimax") && !line.trim().starts_with("</minimax") && !line.trim().starts_with("<invoke") && !line.trim().starts_with("</invoke"))
+                            .map(String::from)
+                            .collect();
+                            
+                        let styled = md_renderer.render(&clean_lines);
                         all_lines.extend(styled);
                     }
                     all_lines.push(Line::from(""));
