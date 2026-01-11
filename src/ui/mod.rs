@@ -829,7 +829,14 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
                         Span::raw(" "),
                     ]));
                     
-                    let content_lines: Vec<String> = display_content.lines().map(String::from).collect();
+                    let mut content_lines: Vec<String> = display_content.lines().map(String::from).collect();
+                    
+                    if content_lines.len() > 5 {
+                        let total = content_lines.len();
+                        content_lines.truncate(5);
+                        content_lines.push(format!("... [Truncated {} more lines]", total - 5));
+                    }
+
                     let styled = md_renderer.render(&content_lines);
                     all_lines.extend(styled);
                     all_lines.push(Line::from(""));
@@ -855,7 +862,10 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
                         // Filter out tool call XML and internal reasoning tags
                         let clean_lines: Vec<String> = msg.content
                             .lines()
-                            .filter(|line| !line.trim().starts_with("<minimax") && !line.trim().starts_with("</minimax") && !line.trim().starts_with("<invoke") && !line.trim().starts_with("</invoke"))
+                            .filter(|line| {
+                                let trimmed = line.trim();
+                                !trimmed.starts_with("<") && !trimmed.starts_with("</")
+                            })
                             .map(String::from)
                             .collect();
                             
