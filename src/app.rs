@@ -67,6 +67,7 @@ pub enum ToolAction {
     FollowLink(usize),
     Scroll { direction: String, amount: usize },
     SaveReport { filename: String, content: String },
+    DisplayContent(String), // New!
 }
 
 /// Panel mode for overlays
@@ -358,6 +359,20 @@ impl App {
                         }
                         ToolAction::SaveReport { filename, .. } => {
                             self.status_message = format!("AI saved report to {}", filename);
+                        }
+                        ToolAction::DisplayContent(content) => {
+                            if let Some(tab) = self.tabs.active_tab_mut() {
+                                // Create a virtual page for the report
+                                let page = Page {
+                                    url: "azul://report".to_string(),
+                                    title: "AI Report".to_string(),
+                                    content_lines: content.lines().map(String::from).collect(),
+                                    raw_content: String::new(),
+                                    links: vec![],
+                                };
+                                tab.set_page(page);
+                                self.status_message = "Displaying AI Report".to_string();
+                            }
                         }
                     }
                 }
@@ -773,6 +788,25 @@ impl App {
         Ok(())
     }
 
+    pub fn handle_paste(&mut self, content: String) -> Result<()> {
+        // Remove carriage returns to handle Windows newlines correctly
+        let content = content.replace("\r", "");
+        
+        if self.focus == Focus::URLBar {
+            // For URL bar, we strip newlines entirely
+            self.url_input.push_str(&content.replace("\n", ""));
+        } else if self.chat_focused {
+            // For chat, we allow newlines but maybe sanitize slightly
+            self.chat_input.push_str(&content);
+        } else if self.panel_mode == PanelMode::Rag {
+            self.rag_query.push_str(&content.replace("\n", ""));
+        } else if self.settings_editing_model {
+            self.settings_model_input.push_str(&content.replace("\n", ""));
+        }
+        
+        Ok(())
+    }
+
     fn handle_tab_bar_keys(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
@@ -1125,10 +1159,30 @@ impl App {
                         return Ok(());
                     }
 
+                    let mut final_message = message;
+
+                    if final_message.trim() == "/edit" {
+                        let temp_file = std::env::temp_dir().join("azul_prompt.txt");
+                        let _ = std::fs::write(&temp_file, "");
+                        let _ = std::process::Command::new("notepad.exe")
+                            .arg(&temp_file)
+                            .status();
+                        if let Ok(content) = std::fs::read_to_string(&temp_file) {
+                            if !content.trim().is_empty() {
+                                final_message = content;
+                                self.status_message = "Prompt loaded from Notepad".to_string();
+                            } else {
+                                self.status_message = "Edit cancelled (empty file)".to_string();
+                                return Ok(());
+                            }
+                        }
+                        let _ = std::fs::remove_file(&temp_file);
+                    }
+
                     let context = self.get_browser_context();
 
                     if let Some(session) = &mut self.chat_session {
-                        session.add_user_message(format!("{}\n\n{}", context, message));
+                        session.add_user_message(format!("{}\n\n{}", context, final_message));
 
                         let api_key = self.config.get_api_key().unwrap_or("").to_string();
                         
@@ -1146,12 +1200,13 @@ impl App {
                         let models = session.available_models.clone();
                         let messages = session.messages.clone();
                         let tx = self.page_tx.clone();
+                        let config = self.config.clone();
 
                         self.mascot.set_state(crate::mascot::MascotState::Loading);
                         self.status_message = "Thinking...".to_string();
 
                         std::thread::spawn(move || {
-                            match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages, &tx) {
+                            match send_chat_message_with_fallback(&api_key, &base_url, &models, &messages, &tx, &config) {
                                 Ok(response) => {
                                     let _ = tx.send(AppMessage::ChatResponse(response));
                                 }
@@ -1481,6 +1536,23 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
+                name: "display_content".to_string(),
+                description: "Display text content in the main browser window (good for long reports)".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The text content to display"
+                        }
+                    },
+                    "required": ["content"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
                 name: "get_page_content".to_string(),
                 description: "Get the full content of the current page".to_string(),
                 parameters: serde_json::json!({
@@ -1543,77 +1615,121 @@ fn get_browser_tools() -> Vec<ToolDefinition> {
     ]
 }
 
-/// Execute Web Search (Brave or Fallback)
-fn brave_search(query: &str, count: usize) -> Result<String> {
-    let api_key = std::env::var("BRAVE_API_KEY")
-        .unwrap_or_default();
+/// Execute Web Search (Serper, Brave, or Fallback)
+fn brave_search(config: &Config, query: &str, count: usize) -> Result<String> {
+    // 1. Try Serper.dev (Google Search) first
+    let env_serper = std::env::var("SERPER_API_KEY").ok();
+    let serper_key = config.ai.as_ref()
+        .and_then(|ai| ai.serper_api_key.as_deref())
+        .or(env_serper.as_deref().filter(|s| !s.is_empty()));
 
-    // Fallback to internal search if no Brave key
-    if api_key.is_empty() {
-        // Use internal SearchManager (DuckDuckGo)
-        let manager = SearchManager::new()?;
-        // Use general search (DuckDuckGo)
+    if let Some(key) = serper_key {
+        eprintln!("Attempting Google Search via Serper..."); // Debug log
+        let client = reqwest::blocking::Client::new();
+        let url = format!(
+            "https://google.serper.dev/search?q={}&num={}&apiKey={}",
+            urlencoding::encode(query),
+            count.min(10),
+            key
+        );
+
+        let res = client.get(&url).send()?;
+
+        let status = res.status();
+        if status.is_success() {
+            let json: serde_json::Value = res.json()?;
+            let mut formatted = Vec::new();
+            
+            if let Some(organic) = json.get("organic").and_then(|o| o.as_array()) {
+                for (i, result) in organic.iter().take(count).enumerate() {
+                    let title = result.get("title").and_then(|v| v.as_str()).unwrap_or("No title");
+                    let link = result.get("link").and_then(|v| v.as_str()).unwrap_or("");
+                    let snippet = result.get("snippet").and_then(|v| v.as_str()).unwrap_or("");
+                    
+                    formatted.push(format!(
+                        "{}. **{}**\n   {}\n   {}\n",
+                        i + 1, title, link, snippet
+                    ));
+                }
+            }
+
+            if !formatted.is_empty() {
+                return Ok(format!("## Google Search Results for: {}\n\n{}", query, formatted.join("\n")));
+            }
+        } else {
+            let err_text = res.text().unwrap_or_else(|_| "Unknown error".to_string());
+            eprintln!("Serper API Error ({}): {}", status, err_text);
+        }
+    }
+
+    let env_brave = std::env::var("BRAVE_API_KEY").ok();
+    let brave_key = config.ai.as_ref()
+        .and_then(|ai| ai.brave_api_key.as_deref())
+        .or(env_brave.as_deref().filter(|s| !s.is_empty()));
+
+    // 2. Fallback to Brave Search API
+    if let Some(key) = brave_key {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+
+        let count = count.min(20).max(1);
+        let url = format!(
+            "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+            urlencoding::encode(query),
+            count
+        );
+
+        let response = client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("X-Subscription-Token", key)
+            .send()?;
+
+        let status = response.status();
+        if status.is_success() {
+            let json: serde_json::Value = response.json()?;
+            let mut results = Vec::new();
+            if let Some(web) = json.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
+                for (i, result) in web.iter().take(count).enumerate() {
+                    let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
+                    let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    let description = result.get("description").and_then(|d| d.as_str()).unwrap_or("No description");
+
+                    results.push(format!(
+                        "{}. **{}**\n   {}\n   {}\n",
+                        i + 1, title, url, description
+                    ));
+                }
+            }
+            if !results.is_empty() {
+                return Ok(format!("## Brave Search Results for: {}\n\n{}", query, results.join("\n")));
+            }
+        } else {
+            let err_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            eprintln!("Brave API Error ({}): {}", status, err_text);
+        }
+    }
+
+    // 3. Final Fallback: DuckDuckGo HTML Scraper (via SearchManager)
+    // SearXNG public instances are flaky, so we use our internal scraper.
+    if let Ok(manager) = SearchManager::new() {
         let engine = crate::search::EngineType::DuckDuckGo;
-        let response = manager.search_with(engine, query)?;
-        
-        if response.results.is_empty() {
-            return Ok("No results found via DuckDuckGo.".to_string());
-        }
-
-        let mut formatted = Vec::new();
-        for (i, result) in response.results.iter().take(count).enumerate() {
-            formatted.push(format!(
-                "{}. **{}**\n   {}\n   {}\n",
-                i + 1, result.title, result.url, result.description
-            ));
-        }
-        
-        return Ok(format!("## Search Results (DDG) for: {}\n\n{}", query, formatted.join("\n")));
-    }
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
-
-    let count = count.min(20).max(1);
-    let url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
-        urlencoding::encode(query),
-        count
-    );
-
-    let response = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .header("X-Subscription-Token", &api_key)
-        .send()?;
-
-    if !response.status().is_success() {
-        return Ok(format!("Search failed: {}", response.status()));
-    }
-
-    let json: serde_json::Value = response.json()?;
-
-    // Extract web results
-    let mut results = Vec::new();
-    if let Some(web) = json.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
-        for (i, result) in web.iter().take(count).enumerate() {
-            let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("No title");
-            let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
-            let description = result.get("description").and_then(|d| d.as_str()).unwrap_or("No description");
-
-            results.push(format!(
-                "{}. **{}**\n   {}\n   {}\n",
-                i + 1, title, url, description
-            ));
+        if let Ok(response) = manager.search_with(engine, query) {
+            if !response.results.is_empty() {
+                let mut formatted = Vec::new();
+                for (i, result) in response.results.iter().take(count).enumerate() {
+                    formatted.push(format!(
+                        "{}. **{}**\n   {}\n   {}\n",
+                        i + 1, result.title, result.url, result.description
+                    ));
+                }
+                return Ok(format!("## Search Results (DDG Scraper) for: {}\n\n{}", query, formatted.join("\n")));
+            }
         }
     }
 
-    if results.is_empty() {
-        Ok("No results found".to_string())
-    } else {
-        Ok(format!("## Search Results for: {}\n\n{}", query, results.join("\n")))
-    }
+    Ok("No results found via Serper, Brave, or DuckDuckGo.".to_string())
 }
 
 /// Response from chat API - can be content or tool calls
@@ -1630,7 +1746,7 @@ fn send_chat_message_with_tools(
     include_tools: bool,
 ) -> Result<ChatApiResponse> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(300))
         .build()?;
 
     let tools = if include_tools {
@@ -1696,15 +1812,16 @@ fn execute_tool_call(
     tool_call: &ToolCall,
     context: &BrowserContext,
     tx: &Sender<AppMessage>,
+    config: &Config,
 ) -> String {
     let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)
         .unwrap_or(serde_json::json!({}));
 
     match tool_call.function.name.as_str() {
-        "brave_search" => {
+        "brave_search" | "bravesearch" => {
             if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
                 let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(5) as usize;
-                match brave_search(query, count) {
+                match brave_search(config, query, count) {
                     Ok(results) => results,
                     Err(e) => format!("Search error: {}", e),
                 }
@@ -1741,6 +1858,14 @@ fn execute_tool_call(
                 amount
             }));
             format!("Scrolling {} by {} lines", direction, amount)
+        }
+        "display_content" => {
+            if let Some(content) = args.get("content").and_then(|v| v.as_str()) {
+                let _ = tx.send(AppMessage::ToolAction(ToolAction::DisplayContent(content.to_string())));
+                "Content displayed in main window.".to_string()
+            } else {
+                "Error: Missing 'content' parameter".to_string()
+            }
         }
         "get_page_content" => {
             if context.content.is_empty() {
@@ -1809,6 +1934,7 @@ fn send_chat_message(
     base_url: &str,
     messages: &[ChatMessage],
     tx: &Sender<AppMessage>,
+    config: &Config,
 ) -> Result<String> {
     // Convert our messages to OpenAI format
     let mut api_messages: Vec<OpenAIChatMessage> = messages
@@ -1859,7 +1985,7 @@ fn send_chat_message(
             // Execute each tool and add results
             let mut tool_results: Vec<String> = Vec::new();
             for tool_call in &tool_calls {
-                let result = execute_tool_call(tool_call, &context, tx);
+                let result = execute_tool_call(tool_call, &context, tx, config);
                 tool_results.push(format!("  ↳ {}", result));
                 api_messages.push(OpenAIChatMessage {
                     role: "tool".to_string(),
@@ -1933,11 +2059,15 @@ fn send_chat_message_with_fallback(
     models: &[String],
     messages: &[ChatMessage],
     tx: &Sender<AppMessage>,
+    config: &Config,
 ) -> Result<String> {
+    // For MiniMax, auto-perform searches before sending
+    let processed_messages = check_and_auto_search_for_minimax(messages, config);
+
     let mut errors = Vec::new();
 
     for (i, model) in models.iter().enumerate() {
-        match send_chat_message(api_key, model, base_url, messages, tx) {
+        match send_chat_message(api_key, model, base_url, &processed_messages, tx, config) {
             Ok(response) => {
                 if i > 0 {
                     // Used a fallback model
@@ -1969,4 +2099,107 @@ fn send_chat_message_with_fallback(
 
     // All models failed
     anyhow::bail!("All models failed:\n{}", errors.join("\n"))
+}
+
+/// Detect if user wants to search and auto-perform search for models that don't support tool calling
+fn check_and_auto_search_for_minimax(messages: &[ChatMessage], config: &Config) -> Vec<ChatMessage> {
+    // Check if this is MiniMax (which doesn't support tool calling properly)
+    let provider = config.ai.as_ref()
+        .and_then(|ai| ai.provider.as_deref())
+        .unwrap_or("openrouter");
+
+    if provider != "minimax" {
+        return messages.to_vec();
+    }
+
+    // Get the last user message
+    let last_user_msg = messages.iter().rev()
+        .find(|m| matches!(m.role, crate::chat::Role::User));
+
+    if let Some(msg) = last_user_msg {
+        let content = &msg.content;
+        
+        // Check for search-related keywords
+        let search_triggers = [
+            "search", "look up", "find information", "what is", "who is",
+            "tell me about", "explain", "when did", "where is", "how to",
+            "why did", "research", "facts about"
+        ];
+
+        let wants_search = search_triggers.iter().any(|trigger| {
+            content.to_lowercase().contains(trigger)
+        }) && !content.contains("[Browser Context]");
+
+        if wants_search {
+            eprintln!("MiniMax detected search intent, auto-performing search...");
+            
+            // Extract query from message
+            let query = content.trim();
+            
+            // Perform search using Serper (which we know works)
+            let env_serper = std::env::var("SERPER_API_KEY").ok().filter(|s| !s.is_empty());
+            if let Some(serper_key) = config.ai.as_ref()
+                .and_then(|ai| ai.serper_api_key.as_deref())
+                .or(env_serper.as_deref())
+            {
+                if let Ok(search_results) = perform_search_with_serper(serper_key, query, 5) {
+                    eprintln!("Search results obtained, appending to message...");
+                    
+                    // Create a new messages vector with search results prepended
+                    let mut new_messages = messages.to_vec();
+                    
+                    // Add search results as a user message before the original message
+                    let search_context = format!(
+                        "\n[Search Results for: {}]\n{}\n\nPlease use these results to answer the question.\n",
+                        query, search_results
+                    );
+                    
+                    // Modify the last user message to include search results
+                    if let Some(last_msg) = new_messages.last_mut() {
+                        last_msg.content = format!("{}{}", search_context, last_msg.content);
+                    }
+                    
+                    return new_messages;
+                }
+            }
+        }
+    }
+
+    messages.to_vec()
+}
+
+/// Perform search using Serper API
+fn perform_search_with_serper(api_key: &str, query: &str, count: usize) -> Result<String> {
+    let client = reqwest::blocking::Client::new();
+    let url = format!(
+        "https://google.serper.dev/search?q={}&num={}&apiKey={}",
+        urlencoding::encode(query),
+        count,
+        api_key
+    );
+
+    let res = client.get(&url).send()?;
+
+    if !res.status().is_success() {
+        anyhow::bail!("Serper API error: {}", res.status());
+    }
+
+    let json: serde_json::Value = res.json()?;
+    let mut results = Vec::new();
+
+    if let Some(organic) = json.get("organic").and_then(|o| o.as_array()) {
+        for (i, result) in organic.iter().take(count).enumerate() {
+            let title = result.get("title").and_then(|v| v.as_str()).unwrap_or("No title");
+            let link = result.get("link").and_then(|v| v.as_str()).unwrap_or("");
+            let snippet = result.get("snippet").and_then(|v| v.as_str()).unwrap_or("");
+
+            results.push(format!("{}. {} - {}\n   {}", i + 1, title, link, snippet));
+        }
+    }
+
+    if results.is_empty() {
+        anyhow::bail!("No results found");
+    }
+
+    Ok(results.join("\n\n"))
 }
