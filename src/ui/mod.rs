@@ -57,25 +57,30 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Constraint::Length(1),   // Tab bar
             Constraint::Length(3),   // URL bar
             Constraint::Min(0),      // Main content
-            Constraint::Length(3),   // Status bar
+            Constraint::Length(2),   // Status bar
         ])
         .split(inner);
 
     render_tab_bar(frame, chunks[0], app);
     render_url_bar(frame, chunks[1], app);
 
-    // Always show 3-panel layout: Links (15%) | Content (50%) | Chat (35%)
-    let split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(15),  // Links (left)
-            Constraint::Percentage(50),  // Content (middle)
-            Constraint::Percentage(35),  // Chat (right)
-        ])
-        .split(chunks[2]);
-    render_compact_sidebar(frame, split[0], app);
-    render_content_only(frame, split[1], app);
-    render_chat_side_panel(frame, split[2], app);
+    if app.fullscreen {
+        // Fullscreen Mode: Only Content
+        render_content_only(frame, chunks[2], app);
+    } else {
+        // Always show 3-panel layout: Links (15%) | Content (50%) | Chat (35%)
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(15),  // Links (left)
+                Constraint::Percentage(50),  // Content (middle)
+                Constraint::Percentage(35),  // Chat (right)
+            ])
+            .split(chunks[2]);
+        render_compact_sidebar(frame, split[0], app);
+        render_content_only(frame, split[1], app);
+        render_chat_side_panel(frame, split[2], app);
+    }
 
     render_status_bar(frame, chunks[3], app);
 
@@ -465,52 +470,44 @@ fn render_compact_sidebar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut App) {
-    let focus_name = match app.focus {
-        Focus::Content => "Content",
-        Focus::Sidebar => "Sidebar",
-        Focus::URLBar => "URL Bar",
-        Focus::TabBar => "Tab Bar",
-        Focus::Bookmarks => "Bookmarks",
-        Focus::History => "History",
+    let mode_style = match app.focus {
+        Focus::URLBar => Style::default().bg(TOKYO_ORANGE).fg(TOKYO_BG).add_modifier(Modifier::BOLD),
+        Focus::Content => Style::default().bg(AZUL_BLUE).fg(TOKYO_BG).add_modifier(Modifier::BOLD),
+        Focus::Sidebar => Style::default().bg(TOKYO_PURPLE).fg(TOKYO_BG).add_modifier(Modifier::BOLD),
+        _ => Style::default().bg(TOKYO_COMMENT).fg(TOKYO_BG).add_modifier(Modifier::BOLD),
     };
 
-    // Tab info
-    let tab_info = format!("[{}/{}]", app.tabs.active_index() + 1, app.tabs.count());
+    let mode_name = match app.focus {
+        Focus::Content => " NORMAL ",
+        Focus::Sidebar => " SIDEBAR ",
+        Focus::URLBar => " INSERT ",
+        Focus::TabBar => " TABS ",
+        Focus::Bookmarks => " BOOKMARKS ",
+        Focus::History => " HISTORY ",
+    };
 
-    // Status indicator
-    let companion = app.mascot.view_status();
-
-    let primary_line = Line::from(vec![
-        Span::styled(companion, Style::default().fg(AZUL_BLUE)),
-        Span::raw(" "),
-        Span::styled(tab_info, Style::default().fg(TOKYO_PURPLE)),
-        Span::raw(" "),
-        Span::styled(focus_name, Style::default().fg(AZUL_BLUE).add_modifier(Modifier::BOLD)),
+    let tab_info = format!(" {}/{} ", app.tabs.active_index() + 1, app.tabs.count());
+    
+    // Left side: Mode | Tabs | Status
+    let status_line = Line::from(vec![
+        Span::styled(mode_name, mode_style),
+        Span::styled(tab_info, Style::default().bg(TOKYO_BG).fg(TOKYO_COMMENT)),
         Span::raw(" "),
         Span::styled(&app.status_message, Style::default().fg(TOKYO_TEXT)),
     ]);
 
-    // Update mascot position
-    app.mascot.set_screen_width(area.width.saturating_sub(4));
+    frame.render_widget(Paragraph::new(status_line), area);
+
+    // Right side: Shortcuts + Mascot (rendered separately to align right)
+    let shortcuts = "/ search  c chat  ? help  q quit ";
     let mascot_sprite = app.mascot.walking_sprite();
-
-    // Shortcuts line with cute mascot at the end
-    let shortcuts = "/ search  t tab  b bookmarks  H history  c chat  ? help  q quit";
-    let secondary_line = Line::from(vec![
-        Span::styled(shortcuts, Style::default().fg(TOKYO_COMMENT)),
-        Span::raw("  "),
-        Span::styled(mascot_sprite, Style::default().fg(Color::Rgb(215, 119, 87))), // Clawd orange color
-    ]);
-
-    let status = Paragraph::new(vec![primary_line, secondary_line])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(TOKYO_BLUE)),
-        )
-        .style(Style::default().fg(TOKYO_TEXT));
-
-    frame.render_widget(status, area);
+    
+    let right_text = format!("{}{} ", shortcuts, mascot_sprite);
+    let right_align = Paragraph::new(right_text)
+        .alignment(Alignment::Right)
+        .style(Style::default().fg(TOKYO_COMMENT));
+    
+    frame.render_widget(right_align, area);
 }
 
 fn render_bookmarks_panel(frame: &mut Frame, area: Rect, app: &App) {
@@ -820,34 +817,59 @@ fn render_chat_side_panel(frame: &mut Frame, area: Rect, app: &App) {
             match msg.role {
                 crate::chat::Role::System => continue,
                 crate::chat::Role::User => {
-                    // User message - azul blue prefix, strip browser context for display
+                    // User message - styled header
                     let display_content = if msg.content.contains("[Browser Context]") {
-                        // Extract just the user's actual message after the context
                         msg.content.split("\n\n").last().unwrap_or(&msg.content).to_string()
                     } else {
                         msg.content.clone()
                     };
+                    
                     all_lines.push(Line::from(vec![
-                        Span::styled("▸ ", Style::default().fg(AZUL_BLUE)),
-                        Span::styled(display_content, Style::default().fg(TOKYO_TEXT)),
+                        Span::styled(" USER ", Style::default().bg(AZUL_BLUE).fg(TOKYO_BG).add_modifier(Modifier::BOLD)),
+                        Span::raw(" "),
                     ]));
+                    
+                    let mut content_lines: Vec<String> = display_content.lines().map(String::from).collect();
+                    
+                    if content_lines.len() > 5 {
+                        let total = content_lines.len();
+                        content_lines.truncate(5);
+                        content_lines.push(format!("... [Truncated {} more lines]", total - 5));
+                    }
+
+                    let styled = md_renderer.render(&content_lines);
+                    all_lines.extend(styled);
                     all_lines.push(Line::from(""));
                 }
                 crate::chat::Role::Assistant => {
-                    // Check for tool calls in the message
+                    // Check for tool calls
                     if let Some(tool_calls) = &msg.tool_calls {
                         for tc in tool_calls {
                             all_lines.push(Line::from(vec![
-                                Span::styled("⚙ ", Style::default().fg(TOKYO_ORANGE)),
+                                Span::styled(" TOOL ", Style::default().bg(TOKYO_ORANGE).fg(TOKYO_BG).add_modifier(Modifier::BOLD)),
+                                Span::raw(" "),
                                 Span::styled(&tc.name, Style::default().fg(TOKYO_ORANGE)),
                             ]));
                         }
                     }
-                    // AI message - render as markdown with green prefix
+                    // AI message - styled header
                     if !msg.content.is_empty() {
-                        all_lines.push(Line::from(Span::styled("◆ ", Style::default().fg(TOKYO_GREEN))));
-                        let content_lines: Vec<String> = msg.content.lines().map(String::from).collect();
-                        let styled = md_renderer.render(&content_lines);
+                        all_lines.push(Line::from(vec![
+                            Span::styled(" AI ", Style::default().bg(TOKYO_GREEN).fg(TOKYO_BG).add_modifier(Modifier::BOLD)),
+                            Span::raw(" "),
+                        ]));
+                        
+                        // Filter out tool call XML and internal reasoning tags
+                        let clean_lines: Vec<String> = msg.content
+                            .lines()
+                            .filter(|line| {
+                                let trimmed = line.trim();
+                                !trimmed.starts_with("<") && !trimmed.starts_with("</")
+                            })
+                            .map(String::from)
+                            .collect();
+                            
+                        let styled = md_renderer.render(&clean_lines);
                         all_lines.extend(styled);
                     }
                     all_lines.push(Line::from(""));

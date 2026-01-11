@@ -31,6 +31,9 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -53,19 +56,24 @@ jobs:
 
       - name: Get version from tag
         id: version
+        shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
           tar czvf ../../../azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz azul
           cd ../../..
+          shasum -a 256 azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz > azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz.sha256
 
-      - name: Generate SHA256
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          shasum -a 256 ../../../azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz > ../../../azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz.sha256
+          7z a ../../../azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip azul.exe
           cd ../../..
+          certutil -hashfile azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip SHA256 > azul-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -74,6 +82,8 @@ jobs:
           path: |
             azul-*.tar.gz
             azul-*.tar.gz.sha256
+            azul-*.zip
+            azul-*.zip.sha256
 
   create-release:
     name: Create Release
@@ -114,6 +124,7 @@ jobs:
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
           files: |
             artifacts/**/*.tar.gz
+            artifacts/**/*.zip
             artifacts/**/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

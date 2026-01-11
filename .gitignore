@@ -1,4 +1,9 @@
 target/
+**/*.rs.bk
+Cargo.lock
+api.pid
+poppler.zip
+poppler_bin/
 *.swp
 *.swo
 .DS_Store

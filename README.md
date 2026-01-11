@@ -8,6 +8,11 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 ## Features
 
+- **Native Windows Support:** Fixed input lag, double-typing issues, and system "open" command compatibility.
+- **MiniMax-M2.1 Integration:** Built-in support for MiniMax AI with reasoning capabilities.
+- **Persistent Chat:** AI conversations are automatically saved and loaded between sessions.
+- **Zen Mode:** Press `z` to toggle fullscreen focus mode for reading papers and articles.
+- **Local File Access:** AI tools to read and analyze local files on your machine.
 - Full TUI web browsing with keyboard navigation
 - AI chat panel with tool-calling support (navigate, scroll, follow links)
 - Multi-engine search (DuckDuckGo, Wikipedia, arXiv, PubMed, Google Scholar, OpenLibrary)
@@ -26,21 +31,28 @@ A beautiful terminal web browser with AI-powered chat, built in Rust.
 
 ### From Releases (Recommended)
 
-Download the latest binary for your platform from [Releases](https://github.com/0xSero/Azul/releases):
+Download the latest binary for your platform from [Releases](https://github.com/nice-bills/Azul/releases):
+
+```powershell
+# Windows (x86_64) - PowerShell
+Invoke-WebRequest -Uri "https://github.com/nice-bills/Azul/releases/latest/download/azul-windows-x86_64.zip" -OutFile "azul.zip"
+Expand-Archive -Path azul.zip -DestinationPath .
+# Move azul.exe to a folder in your PATH (e.g. C:\Windows\system32 or a custom bin folder)
+```
 
 ```bash
 # Linux (x86_64)
-curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-linux-x86_64.tar.gz
+curl -LO https://github.com/nice-bills/Azul/releases/latest/download/azul-linux-x86_64.tar.gz
 tar xzf azul-linux-x86_64.tar.gz
 sudo mv azul /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-darwin-aarch64.tar.gz
+curl -LO https://github.com/nice-bills/Azul/releases/latest/download/azul-darwin-aarch64.tar.gz
 tar xzf azul-darwin-aarch64.tar.gz
 sudo mv azul /usr/local/bin/
 
 # macOS (Intel)
-curl -LO https://github.com/0xSero/Azul/releases/latest/download/azul-darwin-x86_64.tar.gz
+curl -LO https://github.com/nice-bills/Azul/releases/latest/download/azul-darwin-x86_64.tar.gz
 tar xzf azul-darwin-x86_64.tar.gz
 sudo mv azul /usr/local/bin/
 ```
@@ -49,19 +61,15 @@ sudo mv azul /usr/local/bin/
 
 ```bash
 # Clone the repo
-git clone https://github.com/0xSero/Azul.git
+git clone https://github.com/nice-bills/Azul.git
 cd Azul
 
-# Quick install (uses Makefile)
-make install          # System-wide (/usr/local/bin, requires sudo)
-make install-user     # User-only (~/.local/bin)
-
-# Or manually
+# Quick install (Windows)
 cargo build --release
-./target/release/azul
+copy target\release\azul.exe %USERPROFILE%\.cargo\bin\azul.exe
 
-# Or via cargo
-cargo install --path .
+# Quick install (Unix)
+make install-user     # (~/.local/bin)
 ```
 
 ## Quick Start
@@ -96,10 +104,10 @@ Config file location: `~/.config/azul/config.json`
     "background": "#1a1b26"
   },
   "ai": {
-    "provider": "openrouter",
+    "provider": "minimax",
     "api_key": "YOUR_API_KEY",
-    "model": "anthropic/claude-3.5-sonnet",
-    "base_url": "https://openrouter.ai/api/v1"
+    "model": "MiniMax-M2.1",
+    "base_url": "https://api.minimax.io/v1"
   },
   "refresh_rate_ms": 200,
   "rag_base_url": "http://127.0.0.1:3002",
@@ -113,6 +121,7 @@ The browser supports OpenAI-compatible APIs:
 
 | Provider | base_url |
 |----------|----------|
+| MiniMax | `https://api.minimax.io/v1` |
 | OpenRouter | `https://openrouter.ai/api/v1` |
 | OpenAI | `https://api.openai.com/v1` |
 | Local (Ollama) | `http://localhost:11434/v1` |
@@ -128,7 +137,9 @@ The browser supports OpenAI-compatible APIs:
 | `Tab` | Cycle focus (Content -> Chat -> URL) |
 | `Shift+Tab` | Reverse cycle |
 | `/` | Focus URL bar |
+| `z` | Toggle Zen Mode (Fullscreen content) |
 | `Escape` | Cancel/unfocus |
+| `Ctrl+[` | Alternative Escape (useful for broken keys) |
 
 ### Content Navigation
 | Key | Action |
@@ -139,6 +150,7 @@ The browser supports OpenAI-compatible APIs:
 | `G` | Go to bottom |
 | `Tab` (in content) | Next link |
 | `Enter` | Follow selected link |
+| `o` | Open current URL in default system browser |
 | `1-9` | Follow link by number |
 
 ### Chat Panel
@@ -147,6 +159,8 @@ The browser supports OpenAI-compatible APIs:
 | `Up` / `PageUp` | Scroll up (older messages) |
 | `Down` / `PageDown` | Scroll down (newer messages) |
 | `Enter` | Send message |
+| `/clear` | Type this in chat to wipe history |
+| `Ctrl+[` | Exit chat focus |
 | Type | Input text |
 
 ### URL Bar
@@ -175,12 +189,15 @@ The chat panel supports tool calls - the AI can:
 - **Navigate** to URLs
 - **Follow links** by number
 - **Scroll** the page
+- **Read local files** (e.g. "read C:\docs\notes.md")
+- **Save reports** (e.g. "save a summary to report.md")
 
 Example prompts:
 - "Go to wikipedia.org"
 - "Click on the first link"
 - "Scroll down to see more"
 - "Summarize this page"
+- "Research X and save a report to research.md"
 
 ## Development
 

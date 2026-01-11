@@ -75,6 +75,9 @@ impl ChatMessage {
     }
 }
 
+use std::path::PathBuf;
+use anyhow::Context;
+
 /// Chat session
 pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
@@ -84,6 +87,13 @@ pub struct ChatSession {
 
 impl ChatSession {
     pub fn new(model: String, available_models: Vec<String>) -> Self {
+        // Try to load existing history first
+        if let Ok(mut loaded) = Self::load() {
+            loaded.model = model;
+            loaded.available_models = available_models;
+            return loaded;
+        }
+
         let mut session = Self {
             messages: Vec::new(),
             model,
@@ -106,6 +116,38 @@ impl ChatSession {
         session
     }
 
+    pub fn history_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("azul")
+            .join("chat_history.json")
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::history_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(&self.messages)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load() -> Result<Self> {
+        let path = Self::history_path();
+        if !path.exists() {
+            anyhow::bail!("No history file");
+        }
+        let json = std::fs::read_to_string(path)?;
+        let messages: Vec<ChatMessage> = serde_json::from_str(&json)?;
+        
+        Ok(Self {
+            messages,
+            model: String::new(), // Will be overwritten by new()
+            available_models: Vec::new(), // Will be overwritten by new()
+        })
+    }
+
     fn add_system_message(&mut self) {
         let system_prompt = r#"You are Azul Assistant, an AI helper integrated into the Azul terminal web browser.
 
@@ -117,6 +159,11 @@ You have access to the following browser tools:
 - navigate: Navigate to a URL
 - search: Perform a web search
 - add_bookmark: Bookmark the current page
+- save_report: Save text content to a local file (e.g. "research.md")
+
+IMPORTANT: You must use the provided JSON function calling format. 
+Do NOT use XML tags like <invoke> or <toolcall>.
+Do NOT output tool calls in plain text blocks.
 
 When the user asks about the current page, links, or wants to navigate, use these tools.
 Be helpful, concise, and focused on assisting with web browsing tasks."#;
@@ -126,10 +173,12 @@ Be helpful, concise, and focused on assisting with web browsing tasks."#;
 
     pub fn add_user_message(&mut self, content: String) {
         self.messages.push(ChatMessage::new_user(content));
+        let _ = self.save();
     }
 
     pub fn add_assistant_message(&mut self, content: String) {
         self.messages.push(ChatMessage::new_assistant(content));
+        let _ = self.save();
     }
 
     pub fn set_model(&mut self, model: String) {
@@ -139,6 +188,7 @@ Be helpful, concise, and focused on assisting with web browsing tasks."#;
     pub fn clear(&mut self) {
         self.messages.clear();
         self.add_system_message();
+        let _ = self.save();
     }
 }
 

@@ -36,6 +36,10 @@ pub struct AIConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub serper_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brave_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<Vec<String>>,
@@ -117,6 +121,8 @@ impl Config {
             config.ai = Some(AIConfig {
                 provider: None,
                 api_key: None,
+                serper_api_key: None,
+                brave_api_key: None,
                 model: None,
                 models: None,
                 fallback_models: None,
@@ -129,10 +135,26 @@ impl Config {
 
         // Environment variables override file config (compatible with Go version)
 
-        // Try OPENROUTER_API_KEY first, then AZUL_AI_API_KEY
-        if let Some(key) = lookup_env_non_empty(&["OPENROUTER_API_KEY", "AZUL_AI_API_KEY"]) {
+        // Try OPENROUTER_API_KEY first, then AZUL_AI_API_KEY, then MINIMAX_API_KEY
+        if let Some(key) = lookup_env_non_empty(&["OPENROUTER_API_KEY", "AZUL_AI_API_KEY", "MINIMAX_API_KEY"]) {
             if ai.api_key.as_ref() != Some(&key) {
                 ai.api_key = Some(key);
+                changed = true;
+            }
+        }
+
+        // Serper API Key
+        if let Some(key) = std::env::var("SERPER_API_KEY").ok() {
+            if !key.is_empty() && ai.serper_api_key.as_ref() != Some(&key) {
+                ai.serper_api_key = Some(key);
+                changed = true;
+            }
+        }
+
+        // Brave API Key
+        if let Some(key) = std::env::var("BRAVE_API_KEY").ok() {
+            if !key.is_empty() && ai.brave_api_key.as_ref() != Some(&key) {
+                ai.brave_api_key = Some(key);
                 changed = true;
             }
         }
@@ -145,8 +167,8 @@ impl Config {
             }
         }
 
-        // Model (OPENROUTER_MODEL or AZUL_AI_MODEL)
-        if let Some(model) = lookup_env_non_empty(&["OPENROUTER_MODEL", "AZUL_AI_MODEL"]) {
+        // Model lookup
+        if let Some(model) = lookup_env_non_empty(&["OPENROUTER_MODEL", "AZUL_AI_MODEL", "MINIMAX_MODEL"]) {
             if ai.model.as_ref() != Some(&model) {
                 ai.model = Some(model);
                 changed = true;
